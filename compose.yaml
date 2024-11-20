@@ -1,0 +1,27 @@
+services:
+  db:
+    image: postgres:16.1-alpine
+    env_file: .env
+    ports:
+      - "8432:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+
+  dbmigrations:
+    image: amacneil/dbmate:2
+    env_file: .env
+    volumes:
+      - ./db:/db
+    depends_on:
+      - db
+
+  app:
+    build: .
+    env_file: .env
+    ports:
+      - "8000:${PORT}"
+    depends_on:
+      - db
+
+volumes:
+  pg-data:
