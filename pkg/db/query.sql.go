@@ -11,10 +11,65 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const createVenue = `-- name: CreateVenue :one
+insert into venues (name, description, address, city, subdivision, country_code)
+values ($1, $2, $3, $4, $5, $6)
+returning id
+`
+
+type CreateVenueParams struct {
+	Name        string
+	Description pgtype.Text
+	Address     string
+	City        string
+	Subdivision string
+	CountryCode string
+}
+
+func (q *Queries) CreateVenue(ctx context.Context, arg CreateVenueParams) (int32, error) {
+	row := q.db.QueryRow(ctx, createVenue,
+		arg.Name,
+		arg.Description,
+		arg.Address,
+		arg.City,
+		arg.Subdivision,
+		arg.CountryCode,
+	)
+	var id int32
+	err := row.Scan(&id)
+	return id, err
+}
+
+const deleteVenue = `-- name: DeleteVenue :one
+with delete_events as (
+    -- Cascade delete to events.
+    update events
+    set deleted = true
+    where venue_id = $1
+), delete_venues as (
+    update venues
+    set deleted = true
+    where
+        id = $1
+        and deleted = false
+    returning id
+)
+select count(*) from delete_venues
+`
+
+func (q *Queries) DeleteVenue(ctx context.Context, venueID int32) (int64, error) {
+	row := q.db.QueryRow(ctx, deleteVenue, venueID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const getVenue = `-- name: GetVenue :one
 select venues.id, venues.name, venues.description, venues.address, venues.city, venues.subdivision, venues.country_code, venues.deleted
 from venues
-where id = $1
+where
+    id = $1
+    and deleted = false
 `
 
 type GetVenueRow struct {
@@ -46,7 +101,9 @@ set
     city = $4,
     subdivision = $5,
     country_code = $6
-where id = $7
+where
+    id = $7
+    and deleted = false
 returning id
 `
 
@@ -69,35 +126,6 @@ func (q *Queries) UpdateVenue(ctx context.Context, arg UpdateVenueParams) (int32
 		arg.Subdivision,
 		arg.CountryCode,
 		arg.VenueID,
-	)
-	var id int32
-	err := row.Scan(&id)
-	return id, err
-}
-
-const writeNewVenue = `-- name: WriteNewVenue :one
-insert into venues (name, description, address, city, subdivision, country_code)
-values ($1, $2, $3, $4, $5, $6)
-returning id
-`
-
-type WriteNewVenueParams struct {
-	Name        string
-	Description pgtype.Text
-	Address     string
-	City        string
-	Subdivision string
-	CountryCode string
-}
-
-func (q *Queries) WriteNewVenue(ctx context.Context, arg WriteNewVenueParams) (int32, error) {
-	row := q.db.QueryRow(ctx, writeNewVenue,
-		arg.Name,
-		arg.Description,
-		arg.Address,
-		arg.City,
-		arg.Subdivision,
-		arg.CountryCode,
 	)
 	var id int32
 	err := row.Scan(&id)

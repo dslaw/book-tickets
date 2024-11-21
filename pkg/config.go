@@ -3,6 +3,7 @@ package main
 import "os"
 
 type Config struct {
+	APIVersion  string
 	DatabaseURL string
 	Port        string
 }
@@ -19,6 +20,7 @@ func NewConfig() (*Config, bool) {
 	}
 
 	return &Config{
+		APIVersion:  "",
 		DatabaseURL: databaseURL,
 		Port:        port,
 	}, true

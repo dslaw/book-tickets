@@ -1,10 +1,18 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humago"
+	pkgApi "github.com/dslaw/book-tickets/pkg/api"
+	"github.com/dslaw/book-tickets/pkg/repos"
+	"github.com/dslaw/book-tickets/pkg/services"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 )
 
@@ -22,5 +30,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Println(config.DatabaseURL)
+	pool, err := pgxpool.New(context.Background(), config.DatabaseURL)
+	if err != nil {
+		slog.Error("Unable to create connection pool", "error", err)
+		os.Exit(1)
+	}
+	defer pool.Close()
+
+	venuesService := services.NewVenuesService(
+		repos.NewVenuesRepo(pool),
+	)
+
+	router := http.NewServeMux()
+	api := humago.New(router, huma.DefaultConfig("API", config.APIVersion))
+
+	pkgApi.RegisterVenuesHandlers(api, venuesService)
+
+	address := fmt.Sprintf(":%s", config.Port)
+	slog.Info(fmt.Sprintf("Listening on %s", address))
+	http.ListenAndServe(address, router)
 }
