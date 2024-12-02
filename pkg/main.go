@@ -37,14 +37,14 @@ func main() {
 	}
 	defer pool.Close()
 
-	venuesService := services.NewVenuesService(
-		repos.NewVenuesRepo(pool),
-	)
+	venuesService := services.NewVenuesService(repos.NewVenuesRepo(pool))
+	eventsService := services.NewEventsService(repos.NewEventsRepo(pool))
 
 	router := http.NewServeMux()
 	api := humago.New(router, huma.DefaultConfig("API", config.APIVersion))
 
 	pkgApi.RegisterVenuesHandlers(api, venuesService)
+	pkgApi.RegisterEventsHandlers(api, eventsService)
 
 	address := fmt.Sprintf(":%s", config.Port)
 	slog.Info(fmt.Sprintf("Listening on %s", address))

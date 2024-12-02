@@ -35,3 +35,36 @@ func (svc *VenuesService) UpdateVenue(ctx context.Context, venue entities.Venue)
 func (svc *VenuesService) DeleteVenue(ctx context.Context, id int32) error {
 	return svc.repo.DeleteVenue(ctx, id)
 }
+
+type EventsService struct {
+	repo *repos.EventsRepo
+}
+
+func NewEventsService(repo *repos.EventsRepo) *EventsService {
+	return &EventsService{repo: repo}
+}
+
+// CreateEvent creates a new event and returns the new entity's id.
+func (svc *EventsService) CreateEvent(ctx context.Context, event entities.Event) (int32, error) {
+	// TODO: Validate!
+	// starts at >= ends at
+	// starts at /ends at aren't zero valued
+	// ...?
+
+	return svc.repo.CreateEvent(ctx, event)
+}
+
+// GetEvent fetches an event given by the id.
+func (svc *EventsService) GetEvent(ctx context.Context, id int32) (entities.Event, error) {
+	return svc.repo.GetEvent(ctx, id)
+}
+
+// UpdateEvent updates an event given by the id.
+func (svc *EventsService) UpdateEvent(ctx context.Context, event entities.Event) error {
+	return svc.repo.UpdateEvent(ctx, event)
+}
+
+// DeleteEvent deletes an event given by the id.
+func (svc *EventsService) DeleteEvent(ctx context.Context, id int32) error {
+	return svc.repo.DeleteEvent(ctx, id)
+}

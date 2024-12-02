@@ -11,6 +11,33 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const createEvent = `-- name: CreateEvent :one
+insert into events (venue_id, name, starts_at, ends_at, description)
+values ($1, $2, $3, $4, $5)
+returning id
+`
+
+type CreateEventParams struct {
+	VenueID     int32
+	Name        string
+	StartsAt    pgtype.Timestamptz
+	EndsAt      pgtype.Timestamptz
+	Description pgtype.Text
+}
+
+func (q *Queries) CreateEvent(ctx context.Context, arg CreateEventParams) (int32, error) {
+	row := q.db.QueryRow(ctx, createEvent,
+		arg.VenueID,
+		arg.Name,
+		arg.StartsAt,
+		arg.EndsAt,
+		arg.Description,
+	)
+	var id int32
+	err := row.Scan(&id)
+	return id, err
+}
+
 const createVenue = `-- name: CreateVenue :one
 insert into venues (name, description, address, city, subdivision, country_code)
 values ($1, $2, $3, $4, $5, $6)
@@ -40,13 +67,32 @@ func (q *Queries) CreateVenue(ctx context.Context, arg CreateVenueParams) (int32
 	return id, err
 }
 
+const deleteEvent = `-- name: DeleteEvent :one
+with delete_event as (
+    update events
+    set deleted = true
+    where
+        id = $1
+        and deleted = false
+    returning id
+)
+select count(*) from delete_event
+`
+
+func (q *Queries) DeleteEvent(ctx context.Context, eventID int32) (int64, error) {
+	row := q.db.QueryRow(ctx, deleteEvent, eventID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const deleteVenue = `-- name: DeleteVenue :one
 with delete_events as (
     -- Cascade delete to events.
     update events
     set deleted = true
     where venue_id = $1
-), delete_venues as (
+), delete_venue as (
     update venues
     set deleted = true
     where
@@ -54,7 +100,7 @@ with delete_events as (
         and deleted = false
     returning id
 )
-select count(*) from delete_venues
+select count(*) from delete_venue
 `
 
 func (q *Queries) DeleteVenue(ctx context.Context, venueID int32) (int64, error) {
@@ -62,6 +108,61 @@ func (q *Queries) DeleteVenue(ctx context.Context, venueID int32) (int64, error)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const getEvent = `-- name: GetEvent :many
+select
+    events.id, events.venue_id, events.name, events.starts_at, events.ends_at, events.description, events.deleted,
+    venues.name as venue_name,
+    performers.id as performer_id,
+    performers.name as performer_name
+from events
+inner join venues on events.venue_id = venues.id
+left outer join event_performers on events.id = event_performers.event_id
+left outer join performers on event_performers.performer_id = performers.id
+where
+    events.id = $1
+    and events.deleted = false
+    and venues.deleted = false
+`
+
+type GetEventRow struct {
+	Event         Event
+	VenueName     string
+	PerformerID   pgtype.Int4
+	PerformerName pgtype.Text
+}
+
+// TODO: Attach tickets
+func (q *Queries) GetEvent(ctx context.Context, eventID int32) ([]GetEventRow, error) {
+	rows, err := q.db.Query(ctx, getEvent, eventID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetEventRow
+	for rows.Next() {
+		var i GetEventRow
+		if err := rows.Scan(
+			&i.Event.ID,
+			&i.Event.VenueID,
+			&i.Event.Name,
+			&i.Event.StartsAt,
+			&i.Event.EndsAt,
+			&i.Event.Description,
+			&i.Event.Deleted,
+			&i.VenueName,
+			&i.PerformerID,
+			&i.PerformerName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getVenue = `-- name: GetVenue :one
@@ -76,6 +177,7 @@ type GetVenueRow struct {
 	Venue Venue
 }
 
+// TODO: Add upcoming events.
 func (q *Queries) GetVenue(ctx context.Context, venueID int32) (GetVenueRow, error) {
 	row := q.db.QueryRow(ctx, getVenue, venueID)
 	var i GetVenueRow
@@ -90,6 +192,84 @@ func (q *Queries) GetVenue(ctx context.Context, venueID int32) (GetVenueRow, err
 		&i.Venue.Deleted,
 	)
 	return i, err
+}
+
+const linkUpdatedPerformers = `-- name: LinkUpdatedPerformers :exec
+with performer_ids as (
+    select id
+    from performers
+    where name = any($2::text[])
+), del as (
+    delete from event_performers
+    where
+        event_id = $1
+        and not exists (
+            select 1
+            from performer_ids
+            where performer_ids.id = event_performers.performer_id
+        )
+)
+insert into event_performers (event_id, performer_id)
+select $1, id
+from performer_ids
+on conflict (event_id, performer_id) do nothing
+`
+
+type LinkUpdatedPerformersParams struct {
+	EventID int32
+	Names   []string
+}
+
+func (q *Queries) LinkUpdatedPerformers(ctx context.Context, arg LinkUpdatedPerformersParams) error {
+	_, err := q.db.Exec(ctx, linkUpdatedPerformers, arg.EventID, arg.Names)
+	return err
+}
+
+const trimUpdatedEventPerformers = `-- name: TrimUpdatedEventPerformers :exec
+delete from event_performers
+where event_id = $1
+`
+
+func (q *Queries) TrimUpdatedEventPerformers(ctx context.Context, eventID int32) error {
+	_, err := q.db.Exec(ctx, trimUpdatedEventPerformers, eventID)
+	return err
+}
+
+const updateEvent = `-- name: UpdateEvent :one
+update events
+set
+    name = $1,
+    starts_at = $2,
+    ends_at = $3,
+    description = $4
+where
+    id = $5
+    and deleted = false
+returning id
+`
+
+type UpdateEventParams struct {
+	Name        string
+	StartsAt    pgtype.Timestamptz
+	EndsAt      pgtype.Timestamptz
+	Description pgtype.Text
+	EventID     int32
+}
+
+// The updated record's id is returned so that the generated query will return
+// an error (`sql.ErrNoRows`) if no record matches the where clause and no
+// record is updated.
+func (q *Queries) UpdateEvent(ctx context.Context, arg UpdateEventParams) (int32, error) {
+	row := q.db.QueryRow(ctx, updateEvent,
+		arg.Name,
+		arg.StartsAt,
+		arg.EndsAt,
+		arg.Description,
+		arg.EventID,
+	)
+	var id int32
+	err := row.Scan(&id)
+	return id, err
 }
 
 const updateVenue = `-- name: UpdateVenue :one
@@ -117,6 +297,9 @@ type UpdateVenueParams struct {
 	VenueID     int32
 }
 
+// The updated record's id is returned so that the generated query will return
+// an error (`sql.ErrNoRows`) if no record matches the where clause and no
+// record is updated.
 func (q *Queries) UpdateVenue(ctx context.Context, arg UpdateVenueParams) (int32, error) {
 	row := q.db.QueryRow(ctx, updateVenue,
 		arg.Name,

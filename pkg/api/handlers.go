@@ -1,6 +1,5 @@
 package api
 
-// TODO: Log as info level when 404ing?
 import (
 	"context"
 	"errors"
@@ -81,6 +80,89 @@ func RegisterVenuesHandlers(api huma.API, service *services.VenuesService) {
 			}
 
 			slog.Error("Issue deleting venue", "venue_id", input.ID, "error", err)
+			return nil, huma.Error500InternalServerError("")
+		}
+		return nil, nil
+	})
+}
+
+func RegisterEventsHandlers(api huma.API, service *services.EventsService) {
+	huma.Post(api, "/events", func(ctx context.Context, input *struct {
+		Body WriteEventRequest
+	}) (*CreateEventResponseEnvelope, error) {
+		event := MapToEvent(input.Body)
+		if !event.IsValid() {
+			return nil, huma.Error422UnprocessableEntity("")
+		}
+
+		id, err := service.CreateEvent(ctx, event)
+		if err != nil {
+			slog.Error("Issue creating event", "request_data", input.Body, "error", err)
+			return nil, huma.Error500InternalServerError("")
+		}
+
+		response := &CreateEventResponseEnvelope{Body: CreateEventResponse{ID: id}}
+		return response, nil
+	})
+
+	// Read an existing event by id.
+	huma.Get(api, "/events/{id}", func(ctx context.Context, input *struct {
+		ID int32 `path:"id"`
+	}) (*GetEventResponseEnvelope, error) {
+		event, err := service.GetEvent(ctx, input.ID)
+		if err != nil {
+			if errors.Is(err, repos.ErrNoSuchEntity) {
+				return nil, huma.Error404NotFound("")
+			}
+
+			slog.Error("Issue fetching event", "event_id", input.ID, "error", err)
+			return nil, huma.Error500InternalServerError("")
+		}
+
+		response := &GetEventResponseEnvelope{Body: MapToEventResponse(event)}
+		return response, nil
+	})
+
+	// Update an existing event.
+	huma.Put(api, "/events/{id}", func(ctx context.Context, input *struct {
+		ID   int32 `path:"id"`
+		Body WriteEventRequest
+	}) (*struct{}, error) {
+		event := MapToEvent(input.Body)
+		event.ID = input.ID
+		if !event.IsValid() {
+			return nil, huma.Error422UnprocessableEntity("")
+		}
+
+		err := service.UpdateEvent(ctx, event)
+		if err != nil {
+			if errors.Is(err, repos.ErrNoSuchEntity) {
+				slog.Error(
+					"Attempt to update a non-existent or deleted event",
+					"event_id", input.ID,
+					"request_data", input.Body,
+					"error", err,
+				)
+				return nil, huma.Error404NotFound("")
+			}
+
+			slog.Error("Issue updating event", "request_data", input.Body, "error", err)
+			return nil, huma.Error500InternalServerError("")
+		}
+		return nil, nil
+	})
+
+	// Delete an existing event.
+	huma.Delete(api, "/events/{id}", func(ctx context.Context, input *struct {
+		ID int32 `path:"id"`
+	}) (*struct{}, error) {
+		err := service.DeleteEvent(ctx, input.ID)
+		if err != nil {
+			if errors.Is(err, repos.ErrNoSuchEntity) {
+				return nil, huma.Error404NotFound("")
+			}
+
+			slog.Error("Issue deleting event", "event_id", input.ID, "error", err)
 			return nil, huma.Error500InternalServerError("")
 		}
 		return nil, nil

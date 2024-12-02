@@ -9,10 +9,26 @@ import (
 )
 
 type Querier interface {
+	CreateEvent(ctx context.Context, arg CreateEventParams) (int32, error)
 	CreateVenue(ctx context.Context, arg CreateVenueParams) (int32, error)
+	DeleteEvent(ctx context.Context, eventID int32) (int64, error)
 	DeleteVenue(ctx context.Context, venueID int32) (int64, error)
+	// TODO: Attach tickets
+	GetEvent(ctx context.Context, eventID int32) ([]GetEventRow, error)
+	// TODO: Add upcoming events.
 	GetVenue(ctx context.Context, venueID int32) (GetVenueRow, error)
+	LinkPerformers(ctx context.Context, arg []LinkPerformersParams) *LinkPerformersBatchResults
+	LinkUpdatedPerformers(ctx context.Context, arg LinkUpdatedPerformersParams) error
+	TrimUpdatedEventPerformers(ctx context.Context, eventID int32) error
+	// The updated record's id is returned so that the generated query will return
+	// an error (`sql.ErrNoRows`) if no record matches the where clause and no
+	// record is updated.
+	UpdateEvent(ctx context.Context, arg UpdateEventParams) (int32, error)
+	// The updated record's id is returned so that the generated query will return
+	// an error (`sql.ErrNoRows`) if no record matches the where clause and no
+	// record is updated.
 	UpdateVenue(ctx context.Context, arg UpdateVenueParams) (int32, error)
+	WritePerformers(ctx context.Context, name []string) *WritePerformersBatchResults
 }
 
 var _ Querier = (*Queries)(nil)

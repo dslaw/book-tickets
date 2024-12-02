@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/dslaw/book-tickets/pkg/db"
 	"github.com/dslaw/book-tickets/pkg/entities"
@@ -14,31 +15,8 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-type MockQuerier struct {
-	mock.Mock
-}
-
-func (mock *MockQuerier) CreateVenue(ctx context.Context, params db.CreateVenueParams) (int32, error) {
-	args := mock.Called(ctx, params)
-	return args.Get(0).(int32), args.Error(1)
-}
-
-func (mock *MockQuerier) GetVenue(ctx context.Context, venueID int32) (db.GetVenueRow, error) {
-	args := mock.Called(ctx, venueID)
-	return args.Get(0).(db.GetVenueRow), args.Error(1)
-}
-
-func (mock *MockQuerier) UpdateVenue(ctx context.Context, params db.UpdateVenueParams) (int32, error) {
-	args := mock.Called(ctx, params)
-	return args.Get(0).(int32), args.Error(1)
-}
-
-func (mock *MockQuerier) DeleteVenue(ctx context.Context, id int32) (int64, error) {
-	args := mock.Called(ctx, id)
-	return args.Get(0).(int64), args.Error(1)
-}
-
 const venueID = int32(1)
+const eventID = int32(1)
 
 func TestVenuesRepoCreateVenue(t *testing.T) {
 	ctx := context.Background()
@@ -121,7 +99,7 @@ func TestVenuesRepoGetVenue(t *testing.T) {
 	assert.Nil(t, err)
 }
 
-func TestVenuesRepoGetVenueWhenNotFound(t *testing.T) {
+func TestVenuesRepoGetVenueWhenNotFoundOrMarkedDeleted(t *testing.T) {
 	mockQueries := new(MockQuerier)
 	mockQueries.On("GetVenue", mock.Anything, venueID).Return(db.GetVenueRow{}, sql.ErrNoRows)
 
@@ -130,19 +108,6 @@ func TestVenuesRepoGetVenueWhenNotFound(t *testing.T) {
 
 	assert.Empty(t, actual)
 	assert.ErrorIs(t, err, repos.ErrNoSuchEntity)
-}
-
-func TestVenuesRepoGetVenueWhenDeleted(t *testing.T) {
-	ret := db.GetVenueRow{Venue: db.Venue{Deleted: true}}
-
-	mockQueries := new(MockQuerier)
-	mockQueries.On("GetVenue", mock.Anything, venueID).Return(ret, nil)
-
-	repo := repos.NewVenuesRepoFromQueries(mockQueries)
-	actual, err := repo.GetVenue(context.Background(), venueID)
-
-	assert.Empty(t, actual)
-	assert.ErrorIs(t, err, repos.ErrEntityDeleted)
 }
 
 func TestVenuesRepoUpdateVenue(t *testing.T) {
@@ -193,7 +158,7 @@ func TestVenuesRepoUpdateVenueWhenNoRecord(t *testing.T) {
 func TestVenuesRepoDeleteVenue(t *testing.T) {
 	ctx := context.Background()
 	mockQueries := new(MockQuerier)
-	mockQueries.On("DeleteVenue", ctx, venueID).Return(int64(venueID), nil)
+	mockQueries.On("DeleteVenue", ctx, venueID).Return(int64(1), nil)
 
 	repo := repos.NewVenuesRepoFromQueries(mockQueries)
 	err := repo.DeleteVenue(ctx, venueID)
@@ -208,6 +173,274 @@ func TestVenuesRepoDeleteVenueWhenDoesntExistOrDeleted(t *testing.T) {
 
 	repo := repos.NewVenuesRepoFromQueries(mockQueries)
 	err := repo.DeleteVenue(context.Background(), venueID)
+
+	assert.ErrorIs(t, err, repos.ErrNoSuchEntity)
+}
+
+func TestEventsRepoExecCreateEvent(t *testing.T) {
+	ctx := context.Background()
+	startsAt, _ := time.Parse(time.DateOnly, "2020-01-01")
+	endsAt, _ := time.Parse(time.DateOnly, "2020-01-01")
+
+	createEventParams := db.CreateEventParams{
+		VenueID:     venueID,
+		Name:        "Test Event",
+		StartsAt:    pgtype.Timestamptz{Time: startsAt, Valid: true},
+		EndsAt:      pgtype.Timestamptz{Time: endsAt, Valid: true},
+		Description: pgtype.Text{String: "", Valid: false},
+	}
+	writePerformersParams := []string{"Test Performer"}
+	linkPerformersParams := []db.LinkPerformersParams{
+		{EventID: eventID, Name: "Test Performer"},
+	}
+
+	mockQueries := new(MockQuerier)
+	mockQueries.On("CreateEvent", mock.Anything, createEventParams).Return(eventID, nil)
+	mockQueries.On("WritePerformers", mock.Anything, writePerformersParams).Return(
+		&db.WritePerformersBatchResults{},
+	)
+	mockQueries.On("LinkPerformers", mock.Anything, linkPerformersParams).Return(
+		&db.LinkPerformersBatchResults{},
+	)
+
+	event := entities.Event{
+		ID:          eventID,
+		Name:        "Test Event",
+		StartsAt:    startsAt,
+		EndsAt:      endsAt,
+		Description: "",
+		Venue:       entities.EventVenue{ID: 1},
+		Performers:  []entities.Performer{{Name: "Test Performer"}},
+	}
+
+	repo := repos.NewEventsRepoFromQueries(mockQueries)
+	actual, err := repo.ExecCreateEvent(
+		ctx,
+		mockQueries,
+		event,
+		func(br repos.Closable) error { return nil },
+	)
+
+	assert.Equal(t, eventID, actual)
+	assert.Nil(t, err)
+	mockQueries.AssertCalled(t, "CreateEvent", ctx, createEventParams)
+	mockQueries.AssertCalled(t, "WritePerformers", ctx, writePerformersParams)
+	mockQueries.AssertCalled(t, "LinkPerformers", ctx, linkPerformersParams)
+}
+
+func TestEventsRepoGetEvent(t *testing.T) {
+	startsAt, _ := time.Parse(time.DateOnly, "2020-01-01")
+	endsAt, _ := time.Parse(time.DateOnly, "2020-01-01")
+
+	rows := []db.GetEventRow{
+		{
+			Event: db.Event{
+				ID:          eventID,
+				VenueID:     1,
+				Name:        "Test Event",
+				StartsAt:    pgtype.Timestamptz{Time: startsAt, Valid: true},
+				EndsAt:      pgtype.Timestamptz{Time: endsAt, Valid: true},
+				Description: pgtype.Text{String: "", Valid: false},
+				Deleted:     false,
+			},
+			VenueName:     "Test Venue",
+			PerformerID:   pgtype.Int4{Int32: 1, Valid: true},
+			PerformerName: pgtype.Text{String: "Test Performer", Valid: true},
+		},
+	}
+
+	mockQueries := new(MockQuerier)
+	mockQueries.On("GetEvent", mock.Anything, eventID).Return(rows, nil)
+
+	expected := entities.Event{
+		ID:          eventID,
+		Name:        "Test Event",
+		StartsAt:    startsAt,
+		EndsAt:      endsAt,
+		Description: "",
+		Venue: entities.EventVenue{
+			ID:   1,
+			Name: "Test Venue",
+		},
+		Performers: []entities.Performer{
+			{ID: 1, Name: "Test Performer"},
+		},
+	}
+
+	repo := repos.NewEventsRepoFromQueries(mockQueries)
+	actual, err := repo.GetEvent(context.Background(), eventID)
+
+	assert.EqualValues(t, expected, actual)
+	assert.Nil(t, err)
+}
+
+func TestEventsRepoGetEventWhenNotFoundOrMarkedDeleted(t *testing.T) {
+	mockQueries := new(MockQuerier)
+	mockQueries.On("GetEvent", mock.Anything, eventID).Return([]db.GetEventRow{}, nil)
+
+	repo := repos.NewEventsRepoFromQueries(mockQueries)
+	actual, err := repo.GetEvent(context.Background(), eventID)
+
+	assert.Empty(t, actual)
+	assert.ErrorIs(t, err, repos.ErrNoSuchEntity)
+}
+
+func TestEventsRepoExecUpdateEvent(t *testing.T) {
+	ctx := context.Background()
+	eventID := int32(1)
+	startsAt, _ := time.Parse(time.DateOnly, "2020-01-01")
+	endsAt, _ := time.Parse(time.DateOnly, "2020-01-01")
+
+	updateEventParams := db.UpdateEventParams{
+		EventID:     eventID,
+		Name:        "Test Event",
+		StartsAt:    pgtype.Timestamptz{Time: startsAt, Valid: true},
+		EndsAt:      pgtype.Timestamptz{Time: endsAt, Valid: true},
+		Description: pgtype.Text{String: "", Valid: false},
+	}
+	writePerformersParams := []string{"Test Performer"}
+	linkPerformersParams := db.LinkUpdatedPerformersParams{
+		EventID: eventID,
+		Names:   []string{"Test Performer"},
+	}
+
+	mockQueries := new(MockQuerier)
+	mockQueries.On("UpdateEvent", mock.Anything, updateEventParams).Return(eventID, nil)
+	mockQueries.On("WritePerformers", mock.Anything, writePerformersParams).Return(
+		&db.WritePerformersBatchResults{},
+	)
+	mockQueries.On("LinkUpdatedPerformers", mock.Anything, linkPerformersParams).Return(nil)
+
+	event := entities.Event{
+		ID:          eventID,
+		Name:        "Test Event",
+		StartsAt:    startsAt,
+		EndsAt:      endsAt,
+		Description: "",
+		Venue:       entities.EventVenue{ID: 1},
+		Performers:  []entities.Performer{{Name: "Test Performer"}},
+	}
+
+	repo := repos.NewEventsRepoFromQueries(mockQueries)
+	err := repo.ExecUpdateEvent(
+		ctx,
+		mockQueries,
+		event,
+		func(br repos.Closable) error { return nil },
+	)
+
+	assert.Nil(t, err)
+	mockQueries.AssertCalled(t, "UpdateEvent", ctx, updateEventParams)
+	mockQueries.AssertCalled(t, "WritePerformers", ctx, writePerformersParams)
+	mockQueries.AssertCalled(t, "LinkUpdatedPerformers", ctx, linkPerformersParams)
+}
+
+func TestEventsRepoExecUpdateEventWhenNoPerformers(t *testing.T) {
+	ctx := context.Background()
+	eventID := int32(1)
+	startsAt, _ := time.Parse(time.DateOnly, "2020-01-01")
+	endsAt, _ := time.Parse(time.DateOnly, "2020-01-01")
+
+	updateEventParams := db.UpdateEventParams{
+		EventID:     eventID,
+		Name:        "Test Event",
+		StartsAt:    pgtype.Timestamptz{Time: startsAt, Valid: true},
+		EndsAt:      pgtype.Timestamptz{Time: endsAt, Valid: true},
+		Description: pgtype.Text{String: "", Valid: false},
+	}
+	writePerformersParams := []string{}
+	linkPerformersParams := db.LinkUpdatedPerformersParams{}
+
+	mockQueries := new(MockQuerier)
+	mockQueries.On("UpdateEvent", mock.Anything, updateEventParams).Return(eventID, nil)
+	mockQueries.On("TrimUpdatedEventPerformers", mock.Anything, eventID).Return(nil)
+	mockQueries.On("WritePerformers", mock.Anything, writePerformersParams).Return(
+		&db.WritePerformersBatchResults{},
+	)
+	mockQueries.On("LinkUpdatedPerformers", mock.Anything, linkPerformersParams).Return(nil)
+
+	event := entities.Event{
+		ID:          eventID,
+		Name:        "Test Event",
+		StartsAt:    startsAt,
+		EndsAt:      endsAt,
+		Description: "",
+		Venue:       entities.EventVenue{ID: 1},
+		Performers:  []entities.Performer{},
+	}
+
+	repo := repos.NewEventsRepoFromQueries(mockQueries)
+	err := repo.ExecUpdateEvent(
+		ctx,
+		mockQueries,
+		event,
+		func(br repos.Closable) error { return nil },
+	)
+
+	assert.Nil(t, err)
+	mockQueries.AssertCalled(t, "UpdateEvent", ctx, updateEventParams)
+	mockQueries.AssertCalled(t, "TrimUpdatedEventPerformers", ctx, eventID)
+	mockQueries.AssertNotCalled(t, "WritePerformers")
+	mockQueries.AssertNotCalled(t, "LinkUpdatedPerformers")
+}
+
+func TestEventsRepoExecUpdateEventWhenDoesntExistOrDeleted(t *testing.T) {
+	ctx := context.Background()
+	eventID := int32(1)
+	startsAt, _ := time.Parse(time.DateOnly, "2020-01-01")
+	endsAt, _ := time.Parse(time.DateOnly, "2020-01-01")
+
+	updateEventParams := db.UpdateEventParams{
+		EventID:     eventID,
+		Name:        "Test Event",
+		StartsAt:    pgtype.Timestamptz{Time: startsAt, Valid: true},
+		EndsAt:      pgtype.Timestamptz{Time: endsAt, Valid: true},
+		Description: pgtype.Text{String: "", Valid: false},
+	}
+
+	mockQueries := new(MockQuerier)
+	mockQueries.On("UpdateEvent", mock.Anything, updateEventParams).Return(eventID, sql.ErrNoRows)
+
+	event := entities.Event{
+		ID:          eventID,
+		Name:        "Test Event",
+		StartsAt:    startsAt,
+		EndsAt:      endsAt,
+		Description: "",
+		Venue:       entities.EventVenue{ID: 1},
+		Performers:  []entities.Performer{{Name: "Test Performer"}},
+	}
+
+	repo := repos.NewEventsRepoFromQueries(mockQueries)
+	err := repo.ExecUpdateEvent(
+		ctx,
+		mockQueries,
+		event,
+		func(br repos.Closable) error { return nil },
+	)
+
+	assert.ErrorIs(t, repos.ErrNoSuchEntity, err)
+	mockQueries.AssertCalled(t, "UpdateEvent", ctx, updateEventParams)
+}
+
+func TestEventsRepoDeleteEvent(t *testing.T) {
+	ctx := context.Background()
+	mockQueries := new(MockQuerier)
+	mockQueries.On("DeleteEvent", ctx, eventID).Return(int64(1), nil)
+
+	repo := repos.NewEventsRepoFromQueries(mockQueries)
+	err := repo.DeleteEvent(ctx, eventID)
+
+	assert.Nil(t, err)
+	mockQueries.AssertCalled(t, "DeleteEvent", ctx, eventID)
+}
+
+func TestEventsRepoDeleteEventWhenDoesntExistOrDeleted(t *testing.T) {
+	mockQueries := new(MockQuerier)
+	mockQueries.On("DeleteEvent", mock.Anything, eventID).Return(int64(0), nil)
+
+	repo := repos.NewEventsRepoFromQueries(mockQueries)
+	err := repo.DeleteEvent(context.Background(), eventID)
 
 	assert.ErrorIs(t, err, repos.ErrNoSuchEntity)
 }

@@ -4,12 +4,20 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"log/slog"
 
 	"github.com/dslaw/book-tickets/pkg/db"
 	"github.com/dslaw/book-tickets/pkg/entities"
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+type Closable interface {
+	Close() error
+}
+
+// closeBatch implements `Closable` for closing the result of a batch query.
+func closeBatch(br Closable) error {
+	return br.Close()
+}
 
 type VenuesRepo struct {
 	queries db.Querier
@@ -25,11 +33,11 @@ func NewVenuesRepoFromQueries(queries db.Querier) *VenuesRepo {
 }
 
 // CreateVenue inserts a new venue into the database of record and returns its
-// id if successful.
+// id, if successful.
 func (r *VenuesRepo) CreateVenue(ctx context.Context, venue entities.Venue) (int32, error) {
 	params := db.CreateVenueParams{
 		Name:        venue.Name,
-		Description: pgtype.Text{String: venue.Description, Valid: venue.Description != ""},
+		Description: MapNullableString(venue.Description),
 		Address:     venue.Location.Address,
 		City:        venue.Location.City,
 		Subdivision: venue.Location.Subdivision,
@@ -50,10 +58,6 @@ func (r *VenuesRepo) GetVenue(ctx context.Context, id int32) (venue entities.Ven
 		return venue, err
 	}
 
-	if row.Venue.Deleted {
-		return venue, ErrEntityDeleted
-	}
-
 	venue.ID = row.Venue.ID
 	venue.Name = row.Venue.Name
 	venue.Description = row.Venue.Description.String
@@ -68,7 +72,7 @@ func (r *VenuesRepo) GetVenue(ctx context.Context, id int32) (venue entities.Ven
 func (r *VenuesRepo) UpdateVenue(ctx context.Context, venue entities.Venue) error {
 	params := db.UpdateVenueParams{
 		Name:        venue.Name,
-		Description: pgtype.Text{String: venue.Description, Valid: venue.Description != ""},
+		Description: MapNullableString(venue.Description),
 		Address:     venue.Location.Address,
 		City:        venue.Location.City,
 		Subdivision: venue.Location.Subdivision,
@@ -90,7 +94,184 @@ func (r *VenuesRepo) UpdateVenue(ctx context.Context, venue entities.Venue) erro
 // database of record.
 func (r *VenuesRepo) DeleteVenue(ctx context.Context, id int32) error {
 	countDeleted, err := r.queries.DeleteVenue(ctx, id)
-	slog.Info("Deleted venue", "id", id, "count", countDeleted, "has_error", err != nil)
+	if err != nil {
+		return err
+	}
+	if countDeleted == 0 {
+		return ErrNoSuchEntity
+	}
+	return nil
+}
+
+type EventsRepo struct {
+	Conn    *pgxpool.Pool
+	queries db.Querier
+}
+
+func NewEventsRepo(conn *pgxpool.Pool) *EventsRepo {
+	return &EventsRepo{Conn: conn, queries: db.New(conn)}
+}
+
+// For creating a repo with a mock queries object when testing.
+func NewEventsRepoFromQueries(queries db.Querier) *EventsRepo {
+	return &EventsRepo{Conn: nil, queries: queries}
+}
+
+func (r *EventsRepo) writePerformers(
+	ctx context.Context,
+	queries db.Querier,
+	performers []entities.Performer,
+	closeBatch func(Closable) error,
+) ([]string, error) {
+	performerNames := make([]string, len(performers))
+
+	if len(performerNames) == 0 {
+		return performerNames, nil
+	}
+
+	for idx, performer := range performers {
+		performerNames[idx] = performer.Name
+	}
+
+	br := queries.WritePerformers(ctx, performerNames)
+	return performerNames, closeBatch(br)
+}
+
+func (r *EventsRepo) ExecCreateEvent(
+	ctx context.Context,
+	queries db.Querier,
+	event entities.Event,
+	// Callback to close a batch results object. This allows for ease of
+	// testing, as the BatchResults object returned by a batch query doesn't
+	// have an interface to mock, and its call to `Close()` forwards the call to
+	// a private object.
+	closeBatch func(Closable) error,
+) (int32, error) {
+	// Insert event.
+	params := db.CreateEventParams{
+		VenueID:     event.Venue.ID,
+		Name:        event.Name,
+		StartsAt:    MapTime(event.StartsAt),
+		EndsAt:      MapTime(event.EndsAt),
+		Description: MapNullableString(event.Description),
+	}
+	id, err := queries.CreateEvent(ctx, params)
+	if err != nil {
+		return id, err
+	}
+
+	// Upsert performers.
+	performerNames, err := r.writePerformers(ctx, queries, event.Performers, closeBatch)
+
+	// Add event<->performer associations to the bridge table.
+	bridgeParams := make([]db.LinkPerformersParams, len(performerNames))
+	for idx, performerName := range performerNames {
+		bridgeParams[idx] = db.LinkPerformersParams{EventID: id, Name: performerName}
+	}
+
+	lbr := queries.LinkPerformers(ctx, bridgeParams)
+	return id, closeBatch(lbr)
+}
+
+// CreateEvent inserts a new event into the database of record, and creates new
+// performers as necessary. The new event's id is returned, if successful.
+func (r *EventsRepo) CreateEvent(ctx context.Context, event entities.Event) (int32, error) {
+	var id int32
+
+	tx, err := r.Conn.Begin(ctx)
+	if err != nil {
+		return id, err
+	}
+	defer tx.Rollback(ctx)
+
+	qtx := db.New(tx)
+	id, err = r.ExecCreateEvent(ctx, qtx, event, closeBatch)
+	if err != nil {
+		return id, err
+	}
+
+	err = tx.Commit(ctx)
+	return id, err
+}
+
+// GetEvent fetches the venue, given by id, from the database of record.
+func (r *EventsRepo) GetEvent(ctx context.Context, id int32) (entities.Event, error) {
+	rows, err := r.queries.GetEvent(ctx, id)
+	if err != nil {
+		return entities.Event{}, err
+	}
+	if len(rows) == 0 {
+		return entities.Event{}, ErrNoSuchEntity
+	}
+
+	return MapGetEventRows(rows), nil
+}
+
+// UpdateEvent updates an existing venue in the database of record.
+func (r *EventsRepo) ExecUpdateEvent(
+	ctx context.Context,
+	queries db.Querier,
+	event entities.Event,
+	// Callback to close a batch results object. This allows for ease of
+	// testing, as the BatchResults object returned by a batch query doesn't
+	// have an interface to mock, and its call to `Close()` forwards the call to
+	// a private object.
+	closeBatch func(Closable) error,
+) error {
+	params := db.UpdateEventParams{
+		EventID:     event.ID,
+		Name:        event.Name,
+		StartsAt:    MapTime(event.StartsAt),
+		EndsAt:      MapTime(event.EndsAt),
+		Description: MapNullableString(event.Description),
+	}
+
+	if _, err := queries.UpdateEvent(ctx, params); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNoSuchEntity
+		}
+		return err
+	}
+
+	if len(event.Performers) == 0 {
+		// Remove event<->performer assocations, leaving any dangling performer
+		// records intact.
+		return queries.TrimUpdatedEventPerformers(ctx, event.ID)
+	}
+
+	// Add performer records as necessary, and update the set of
+	// event<->associations.
+	performerNames, err := r.writePerformers(ctx, queries, event.Performers, closeBatch)
+	if err != nil {
+		return err
+	}
+
+	bridgeParams := db.LinkUpdatedPerformersParams{
+		EventID: event.ID,
+		Names:   performerNames,
+	}
+	return queries.LinkUpdatedPerformers(ctx, bridgeParams)
+}
+
+// UpdateEvent updates an existing venue in the database of record.
+func (r *EventsRepo) UpdateEvent(ctx context.Context, event entities.Event) error {
+	tx, err := r.Conn.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	qtx := db.New(tx)
+	if err := r.ExecUpdateEvent(ctx, qtx, event, closeBatch); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+// DeleteEvent marks an event as deleted in the database of record.
+func (r *EventsRepo) DeleteEvent(ctx context.Context, id int32) error {
+	countDeleted, err := r.queries.DeleteEvent(ctx, id)
 	if err != nil {
 		return err
 	}
