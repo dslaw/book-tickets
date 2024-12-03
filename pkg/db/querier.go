@@ -13,9 +13,8 @@ type Querier interface {
 	CreateVenue(ctx context.Context, arg CreateVenueParams) (int32, error)
 	DeleteEvent(ctx context.Context, eventID int32) (int64, error)
 	DeleteVenue(ctx context.Context, venueID int32) (int64, error)
-	// TODO: Attach tickets
+	GetAvailableTickets(ctx context.Context, eventID int32) ([]GetAvailableTicketsRow, error)
 	GetEvent(ctx context.Context, eventID int32) ([]GetEventRow, error)
-	// TODO: Add upcoming events.
 	GetVenue(ctx context.Context, venueID int32) (GetVenueRow, error)
 	LinkPerformers(ctx context.Context, arg []LinkPerformersParams) *LinkPerformersBatchResults
 	LinkUpdatedPerformers(ctx context.Context, arg LinkUpdatedPerformersParams) error
@@ -28,6 +27,10 @@ type Querier interface {
 	// an error (`sql.ErrNoRows`) if no record matches the where clause and no
 	// record is updated.
 	UpdateVenue(ctx context.Context, arg UpdateVenueParams) (int32, error)
+	// The inserted record's id is returned so that the generated query will return
+	// an error (`sql.ErrNoRows`) if no record is inserted due to the where clause
+	// not finding a matching event.
+	WriteNewTickets(ctx context.Context, arg []WriteNewTicketsParams) *WriteNewTicketsBatchResults
 	WritePerformers(ctx context.Context, name []string) *WritePerformersBatchResults
 }
 

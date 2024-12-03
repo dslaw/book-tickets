@@ -47,3 +47,18 @@ func MapGetEventRows(rows []db.GetEventRow) entities.Event {
 		},
 	}
 }
+
+func MapGetAvailableTicketRows(rows []db.GetAvailableTicketsRow) []entities.Ticket {
+	tickets := make([]entities.Ticket, len(rows))
+	for idx, row := range rows {
+		tickets[idx] = entities.Ticket{
+			ID:          row.Ticket.ID,
+			EventID:     row.Ticket.EventID,
+			PurchaserID: row.Ticket.PurchaserID.Int32,
+			IsPurchased: row.Ticket.PurchaserID.Valid,
+			Price:       uint8(row.Ticket.Price),
+			Seat:        row.Ticket.Seat,
+		}
+	}
+	return tickets
+}

@@ -129,3 +129,40 @@ func TestMapToEventResponse(t *testing.T) {
 	actual := api.MapToEventResponse(event)
 	assert.EqualValues(t, expected, actual)
 }
+
+func TestMapToTickets(t *testing.T) {
+	eventID := int32(1)
+	requestData := api.WriteTicketReleaseRequest{
+		TicketReleases: []api.WriteTicketRelease{
+			{Number: 2, Seat: "GA", Price: 10},
+			{Number: 3, Seat: "Balcony", Price: 20},
+		},
+	}
+
+	expected := []entities.Ticket{
+		{EventID: eventID, Price: 10, Seat: "GA"},
+		{EventID: eventID, Price: 10, Seat: "GA"},
+		{EventID: eventID, Price: 20, Seat: "Balcony"},
+		{EventID: eventID, Price: 20, Seat: "Balcony"},
+		{EventID: eventID, Price: 20, Seat: "Balcony"},
+	}
+
+	actual := api.MapToTickets(requestData, eventID)
+	assert.EqualValues(t, expected, actual)
+}
+
+func TestMapToAvailableTicketsAggregateResponse(t *testing.T) {
+	ticketAggregates := []entities.AvailableTicketAggregate{
+		{Seat: "GA", Price: 10, IDs: []int32{1, 2, 3}},
+		{Seat: "Balcony", Price: 20, IDs: []int32{4, 5}},
+	}
+	expected := api.GetAvailableTicketsAggregateResponse{
+		Available: []api.GetAvailableTicketsAggregate{
+			{Seat: "GA", Price: 10, TicketIDs: []int32{1, 2, 3}},
+			{Seat: "Balcony", Price: 20, TicketIDs: []int32{4, 5}},
+		},
+	}
+
+	actual := api.MapToAvailableTicketsAggregateResponse(ticketAggregates)
+	assert.EqualValues(t, expected, actual)
+}

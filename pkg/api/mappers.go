@@ -63,3 +63,37 @@ func MapToEventResponse(event entities.Event) GetEventResponse {
 	}
 	return response
 }
+
+func MapToTickets(data WriteTicketReleaseRequest, eventID int32) []entities.Ticket {
+	totalTickets := 0
+	for _, batch := range data.TicketReleases {
+		totalTickets += int(batch.Number)
+	}
+
+	tickets := make([]entities.Ticket, totalTickets)
+	idx := 0
+	for _, batch := range data.TicketReleases {
+		for range batch.Number {
+			tickets[idx] = entities.Ticket{
+				EventID: eventID,
+				Price:   batch.Price,
+				Seat:    batch.Seat,
+			}
+			idx++
+		}
+	}
+
+	return tickets
+}
+
+func MapToAvailableTicketsAggregateResponse(ticketAggregates []entities.AvailableTicketAggregate) GetAvailableTicketsAggregateResponse {
+	aggregates := make([]GetAvailableTicketsAggregate, len(ticketAggregates))
+	for idx, ticketAggregate := range ticketAggregates {
+		aggregates[idx] = GetAvailableTicketsAggregate{
+			Seat:      ticketAggregate.Seat,
+			Price:     ticketAggregate.Price,
+			TicketIDs: ticketAggregate.IDs,
+		}
+	}
+	return GetAvailableTicketsAggregateResponse{Available: aggregates}
+}

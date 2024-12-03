@@ -31,6 +31,11 @@ func (mock *MockQuerier) DeleteVenue(ctx context.Context, id int32) (int64, erro
 	return args.Get(0).(int64), args.Error(1)
 }
 
+func (mock *MockQuerier) GetAvailableTickets(ctx context.Context, eventID int32) ([]db.GetAvailableTicketsRow, error) {
+	args := mock.Called(ctx, eventID)
+	return args.Get(0).([]db.GetAvailableTicketsRow), args.Error(1)
+}
+
 func (mock *MockQuerier) GetEvent(ctx context.Context, id int32) ([]db.GetEventRow, error) {
 	args := mock.Called(ctx, id)
 	return args.Get(0).([]db.GetEventRow), args.Error(1)
@@ -64,6 +69,11 @@ func (mock *MockQuerier) UpdateEvent(ctx context.Context, params db.UpdateEventP
 func (mock *MockQuerier) UpdateVenue(ctx context.Context, params db.UpdateVenueParams) (int32, error) {
 	args := mock.Called(ctx, params)
 	return args.Get(0).(int32), args.Error(1)
+}
+
+func (mock *MockQuerier) WriteNewTickets(ctx context.Context, params []db.WriteNewTicketsParams) *db.WriteNewTicketsBatchResults {
+	args := mock.Called(ctx, params)
+	return args.Get(0).(*db.WriteNewTicketsBatchResults)
 }
 
 func (mock *MockQuerier) WritePerformers(ctx context.Context, params []string) *db.WritePerformersBatchResults {

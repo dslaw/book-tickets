@@ -39,12 +39,14 @@ func main() {
 
 	venuesService := services.NewVenuesService(repos.NewVenuesRepo(pool))
 	eventsService := services.NewEventsService(repos.NewEventsRepo(pool))
+	ticketsService := services.NewTicketsService(repos.NewTicketsRepo(pool))
 
 	router := http.NewServeMux()
 	api := humago.New(router, huma.DefaultConfig("API", config.APIVersion))
 
 	pkgApi.RegisterVenuesHandlers(api, venuesService)
 	pkgApi.RegisterEventsHandlers(api, eventsService)
+	pkgApi.RegisterTicketsHandlers(api, ticketsService)
 
 	address := fmt.Sprintf(":%s", config.Port)
 	slog.Info(fmt.Sprintf("Listening on %s", address))

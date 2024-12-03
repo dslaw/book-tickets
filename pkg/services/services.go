@@ -46,11 +46,6 @@ func NewEventsService(repo *repos.EventsRepo) *EventsService {
 
 // CreateEvent creates a new event and returns the new entity's id.
 func (svc *EventsService) CreateEvent(ctx context.Context, event entities.Event) (int32, error) {
-	// TODO: Validate!
-	// starts at >= ends at
-	// starts at /ends at aren't zero valued
-	// ...?
-
 	return svc.repo.CreateEvent(ctx, event)
 }
 
@@ -67,4 +62,67 @@ func (svc *EventsService) UpdateEvent(ctx context.Context, event entities.Event)
 // DeleteEvent deletes an event given by the id.
 func (svc *EventsService) DeleteEvent(ctx context.Context, id int32) error {
 	return svc.repo.DeleteEvent(ctx, id)
+}
+
+type TicketsService struct {
+	repo *repos.TicketsRepo
+}
+
+func NewTicketsService(repo *repos.TicketsRepo) *TicketsService {
+	return &TicketsService{repo: repo}
+}
+
+func (svc *TicketsService) AddTickets(
+	ctx context.Context,
+	eventID int32,
+	tickets []entities.Ticket,
+) error {
+	return svc.repo.WriteTickets(ctx, tickets)
+}
+
+func (svc *TicketsService) AggregateTickets(tickets []entities.Ticket) []entities.AvailableTicketAggregate {
+	grouped := make(map[string][]entities.Ticket)
+	for _, ticket := range tickets {
+		if ticket.IsPurchased {
+			continue
+		}
+
+		group, ok := grouped[ticket.Seat]
+		if !ok {
+			grouped[ticket.Seat] = make([]entities.Ticket, 0)
+		}
+		grouped[ticket.Seat] = append(group, ticket)
+	}
+
+	aggregates := make([]entities.AvailableTicketAggregate, len(grouped))
+	idx := 0
+	for _, group := range grouped {
+		if len(group) == 0 {
+			// Shouldn't happen.
+			continue
+		}
+
+		ids := make([]int32, len(group))
+		for ticketIdx, ticket := range group {
+			ids[ticketIdx] = ticket.ID
+		}
+
+		ticket := group[0]
+		aggregates[idx] = entities.AvailableTicketAggregate{
+			Price: ticket.Price,
+			Seat:  ticket.Seat,
+			IDs:   ids,
+		}
+		idx++
+	}
+
+	return aggregates
+}
+
+func (svc *TicketsService) GetAvailableTickets(ctx context.Context, eventID int32) ([]entities.AvailableTicketAggregate, error) {
+	tickets, err := svc.repo.GetAvailableTickets(ctx, eventID)
+	if err != nil {
+		return []entities.AvailableTicketAggregate{}, err
+	}
+	return svc.AggregateTickets(tickets), nil
 }

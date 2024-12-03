@@ -168,3 +168,51 @@ func RegisterEventsHandlers(api huma.API, service *services.EventsService) {
 		return nil, nil
 	})
 }
+
+func RegisterTicketsHandlers(api huma.API, service *services.TicketsService) {
+	// Release tickets for an event.
+	huma.Post(api, "/events/{id}/tickets", func(ctx context.Context, input *struct {
+		EventID int32 `path:"id"`
+		Body    WriteTicketReleaseRequest
+	}) (*struct{}, error) {
+		tickets := MapToTickets(input.Body, input.EventID)
+		err := service.AddTickets(ctx, input.EventID, tickets)
+		if err != nil {
+			if errors.Is(err, repos.ErrNoSuchEntity) {
+				return nil, huma.Error404NotFound("")
+			}
+
+			slog.Error(
+				"Issue releasing tickets",
+				"event_id", input.EventID,
+				"request_data", input.Body,
+				"error", err,
+			)
+			return nil, huma.Error500InternalServerError("")
+		}
+		return nil, nil
+	})
+
+	// Read tickets for an event.
+	huma.Get(api, "/events/{id}/tickets", func(ctx context.Context, input *struct {
+		EventID int32 `path:"id"`
+	}) (*GetAvailableTicketsAggregateResponseEnvelope, error) {
+		ticketAggregates, err := service.GetAvailableTickets(ctx, input.EventID)
+		if err != nil {
+			if errors.Is(err, repos.ErrNoSuchEntity) {
+				return nil, huma.Error404NotFound("")
+			}
+
+			slog.Error(
+				"Issue fetching available tickets",
+				"event_id", input.EventID,
+				"error", err,
+			)
+			return nil, huma.Error500InternalServerError("")
+		}
+
+		response := &GetAvailableTicketsAggregateResponseEnvelope{}
+		response.Body = MapToAvailableTicketsAggregateResponse(ticketAggregates)
+		return response, nil
+	})
+}

@@ -19,6 +19,10 @@ func closeBatch(br Closable) error {
 	return br.Close()
 }
 
+type QueryRowable interface {
+	QueryRow(func(int, int32, error))
+}
+
 type VenuesRepo struct {
 	queries db.Querier
 }
@@ -279,4 +283,75 @@ func (r *EventsRepo) DeleteEvent(ctx context.Context, id int32) error {
 		return ErrNoSuchEntity
 	}
 	return nil
+}
+
+type TicketsRepo struct {
+	queries db.Querier
+}
+
+func NewTicketsRepo(conn db.DBTX) *TicketsRepo {
+	return &TicketsRepo{queries: db.New(conn)}
+}
+
+// For creating a repo with a mock queries object when testing.
+func NewTicketsRepoFromQueries(queries db.Querier) *TicketsRepo {
+	return &TicketsRepo{queries: queries}
+}
+
+func (r *TicketsRepo) ExecWriteTickets(
+	ctx context.Context,
+	queries db.Querier,
+	tickets []entities.Ticket,
+	queryRow func(QueryRowable),
+) {
+	params := make([]db.WriteNewTicketsParams, len(tickets))
+	for idx, ticket := range tickets {
+		params[idx] = db.WriteNewTicketsParams{
+			EventID: ticket.EventID,
+			Price:   int32(ticket.Price),
+			Seat:    ticket.Seat,
+		}
+	}
+
+	br := queries.WriteNewTickets(ctx, params)
+	queryRow(br)
+	return
+}
+
+func (r *TicketsRepo) WriteTickets(ctx context.Context, tickets []entities.Ticket) error {
+	var err error
+
+	if len(tickets) == 0 {
+		return nil
+	}
+
+	collectErr := func(_ int, _ int32, batchErr error) {
+		err = batchErr
+	}
+
+	r.ExecWriteTickets(ctx, r.queries, tickets, func(br QueryRowable) {
+		br.QueryRow(collectErr)
+	})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNoSuchEntity
+		}
+		return err
+	}
+
+	return nil
+}
+
+// GetAvailableTickets fetches tickets that are available for purchase, for the
+// given event.
+func (r *TicketsRepo) GetAvailableTickets(ctx context.Context, eventID int32) ([]entities.Ticket, error) {
+	rows, err := r.queries.GetAvailableTickets(ctx, eventID)
+	if err != nil {
+		return []entities.Ticket{}, err
+	}
+	if len(rows) == 0 {
+		return []entities.Ticket{}, ErrNoSuchEntity
+	}
+
+	return MapGetAvailableTicketRows(rows), nil
 }

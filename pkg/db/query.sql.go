@@ -110,6 +110,46 @@ func (q *Queries) DeleteVenue(ctx context.Context, venueID int32) (int64, error)
 	return count, err
 }
 
+const getAvailableTickets = `-- name: GetAvailableTickets :many
+select tickets.id, tickets.event_id, tickets.purchaser_id, tickets.price, tickets.seat
+from tickets
+inner join events on tickets.event_id = events.id
+where 
+    tickets.purchaser_id is null
+    and tickets.event_id = $1
+    and events.deleted = false
+`
+
+type GetAvailableTicketsRow struct {
+	Ticket Ticket
+}
+
+func (q *Queries) GetAvailableTickets(ctx context.Context, eventID int32) ([]GetAvailableTicketsRow, error) {
+	rows, err := q.db.Query(ctx, getAvailableTickets, eventID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetAvailableTicketsRow
+	for rows.Next() {
+		var i GetAvailableTicketsRow
+		if err := rows.Scan(
+			&i.Ticket.ID,
+			&i.Ticket.EventID,
+			&i.Ticket.PurchaserID,
+			&i.Ticket.Price,
+			&i.Ticket.Seat,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getEvent = `-- name: GetEvent :many
 select
     events.id, events.venue_id, events.name, events.starts_at, events.ends_at, events.description, events.deleted,
@@ -133,7 +173,6 @@ type GetEventRow struct {
 	PerformerName pgtype.Text
 }
 
-// TODO: Attach tickets
 func (q *Queries) GetEvent(ctx context.Context, eventID int32) ([]GetEventRow, error) {
 	rows, err := q.db.Query(ctx, getEvent, eventID)
 	if err != nil {
@@ -177,7 +216,6 @@ type GetVenueRow struct {
 	Venue Venue
 }
 
-// TODO: Add upcoming events.
 func (q *Queries) GetVenue(ctx context.Context, venueID int32) (GetVenueRow, error) {
 	row := q.db.QueryRow(ctx, getVenue, venueID)
 	var i GetVenueRow

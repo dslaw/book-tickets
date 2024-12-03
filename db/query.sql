@@ -3,7 +3,6 @@ insert into venues (name, description, address, city, subdivision, country_code)
 values (@name, @description, @address, @city, @subdivision, @country_code)
 returning id;
 
--- TODO: Add upcoming events.
 -- name: GetVenue :one
 select sqlc.embed(venues)
 from venues
@@ -59,7 +58,6 @@ insert into events (venue_id, name, starts_at, ends_at, description)
 values (@venue_id, @name, @starts_at, @ends_at, @description)
 returning id;
 
--- TODO: Attach tickets
 -- name: GetEvent :many
 select
     sqlc.embed(events),
@@ -124,3 +122,24 @@ with delete_event as (
     returning id
 )
 select count(*) from delete_event;
+
+-- name: GetAvailableTickets :many
+select sqlc.embed(tickets)
+from tickets
+inner join events on tickets.event_id = events.id
+where 
+    tickets.purchaser_id is null
+    and tickets.event_id = @event_id
+    and events.deleted = false;
+
+-- name: WriteNewTickets :batchone
+-- The inserted record's id is returned so that the generated query will return
+-- an error (`sql.ErrNoRows`) if no record is inserted due to the where clause
+-- not finding a matching event.
+insert into tickets (event_id, purchaser_id, price, seat)
+select events.id, null, @price, @seat
+from events
+where
+    events.id = @event_id
+    and events.deleted = false
+returning id;

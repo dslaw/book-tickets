@@ -42,3 +42,18 @@ func (e *Event) IsValid() bool {
 	}
 	return true
 }
+
+type Ticket struct {
+	ID          int32
+	EventID     int32
+	PurchaserID int32
+	IsPurchased bool
+	Price       uint8
+	Seat        string
+}
+
+type AvailableTicketAggregate struct {
+	Price uint8
+	Seat  string
+	IDs   []int32
+}

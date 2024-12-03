@@ -26,6 +26,8 @@ import (
 )
 
 const (
+	userID = int32(1)
+
 	readVenueID    = int32(1)
 	updateVenueID  = int32(2)
 	deletedVenueID = int32(3)
@@ -41,8 +43,10 @@ func ClearTestDatabase(ctx context.Context, conn *pgxpool.Pool) error {
 	tableNames := []string{
 		"performers",
 		"event_performers",
+		"tickets",
 		"events",
 		"venues",
+		"users",
 	}
 
 	for _, tableName := range tableNames {
@@ -57,6 +61,16 @@ func ClearTestDatabase(ctx context.Context, conn *pgxpool.Pool) error {
 }
 
 func WriteTestData(ctx context.Context, conn *pgxpool.Pool) error {
+	insertUsersStmt := `
+insert into users (id, name, email)
+overriding system value
+values ($1, 'Test user', 'test@user.com');
+`
+	_, err := conn.Exec(ctx, insertUsersStmt, userID)
+	if err != nil {
+		return err
+	}
+
 	insertVenuesStmt := `
 insert into venues (id, name, description, address, city, subdivision, country_code, deleted)
 overriding system value
@@ -65,7 +79,7 @@ values
     ($2, 'Test venue to update', '', '12 Front Street', 'San Francisco', 'CA', 'USA', false),
     ($3, 'Test venue deleted', '', '13 Front Street', 'San Francisco', 'CA', 'USA', true);
 `
-	_, err := conn.Exec(ctx, insertVenuesStmt, readVenueID, updateVenueID, deletedVenueID)
+	_, err = conn.Exec(ctx, insertVenuesStmt, readVenueID, updateVenueID, deletedVenueID)
 	if err != nil {
 		return err
 	}
@@ -118,11 +132,11 @@ func (suite *HandlersTestSuite) SetupSuite() {
 }
 
 func (suite *HandlersTestSuite) TeardownSuite() {
+	defer suite.Conn.Close()
+
 	if err := ClearTestDatabase(context.Background(), suite.Conn); err != nil {
 		assert.FailNow(suite.T(), "Unable to clear test data on teardown")
 	}
-
-	defer suite.Conn.Close()
 }
 
 func CreateAPIForVenues(suite *HandlersTestSuite) humatest.TestAPI {
@@ -138,6 +152,14 @@ func CreateAPIForEvents(suite *HandlersTestSuite) humatest.TestAPI {
 	service := services.NewEventsService(repos.NewEventsRepo(suite.Conn))
 	_, api := humatest.New(t)
 	pkgApi.RegisterEventsHandlers(api, service)
+	return api
+}
+
+func CreateAPIForTickets(suite *HandlersTestSuite) humatest.TestAPI {
+	t := suite.T()
+	service := services.NewTicketsService(repos.NewTicketsRepo(suite.Conn))
+	_, api := humatest.New(t)
+	pkgApi.RegisterTicketsHandlers(api, service)
 	return api
 }
 
@@ -628,6 +650,146 @@ func (suite *HandlersTestSuite) TestDeleteEventWhenDoesntExistOrDeleted() {
 	for _, id := range []int32{missingEventID, deletedEventID} {
 		path := fmt.Sprintf("/events/%d", id)
 		response := api.Delete(path)
+		assert.Equal(t, http.StatusNotFound, response.Code)
+	}
+}
+
+// Test releasing tickets for an existing event.
+func (suite *HandlersTestSuite) TestReleaseTickets() {
+	t := suite.T()
+	api := CreateAPIForTickets(suite)
+
+	data := []map[string]any{
+		{"seat": "GA", "price": 10, "number": 2},
+		{"seat": "Balcony", "price": 20, "number": 1},
+	}
+	requestBody := map[string]any{"ticket_releases": data}
+
+	response := api.Post(fmt.Sprintf("/events/%d/tickets", readEventID), requestBody)
+	require.Equal(t, http.StatusNoContent, response.Code)
+
+	// Check that the database reflects the addition.
+	queries := db.New(suite.Conn)
+	rows, err := queries.GetAvailableTickets(context.Background(), readEventID)
+	if err != nil {
+		assert.FailNow(t, fmt.Sprintf("Error reading event: %s", err))
+	}
+
+	require.Equal(t, 3, len(rows))
+
+	type partialTicket struct {
+		EventID          int32
+		PurchaserIDValid bool
+		Price            int32
+		Seat             string
+	}
+	actual := make([]partialTicket, len(rows))
+	for idx, row := range rows {
+		actual[idx] = partialTicket{
+			EventID:          row.Ticket.EventID,
+			PurchaserIDValid: row.Ticket.PurchaserID.Valid,
+			Price:            row.Ticket.Price,
+			Seat:             row.Ticket.Seat,
+		}
+	}
+
+	assert.EqualValues(t, []partialTicket{
+		{EventID: readEventID, PurchaserIDValid: false, Price: 10, Seat: "GA"},
+		{EventID: readEventID, PurchaserIDValid: false, Price: 10, Seat: "GA"},
+		{EventID: readEventID, PurchaserIDValid: false, Price: 20, Seat: "Balcony"},
+	}, actual)
+}
+
+// Test releasing tickets for a non-existent or deleted event.
+func (suite *HandlersTestSuite) TestReleaseTicketsWhenEventDoesntExistOrDeleted() {
+	t := suite.T()
+	api := CreateAPIForTickets(suite)
+
+	data := []map[string]any{
+		{"seat": "GA", "price": 10, "number": 2},
+		{"seat": "Balcony", "price": 20, "number": 1},
+	}
+	requestBody := map[string]any{"ticket_releases": data}
+
+	for _, id := range []int32{missingEventID, deletedEventID} {
+		path := fmt.Sprintf("/events/%d/tickets", id)
+		response := api.Post(path, requestBody)
+		assert.Equal(t, http.StatusNotFound, response.Code)
+	}
+}
+
+// Test fetching tickets for an existing event.
+func (suite *HandlersTestSuite) TestGetTickets() {
+	t := suite.T()
+
+	// Setup/teardown of data.
+	ctx := context.Background()
+	availableTicketGAIDs := []int32{11, 12}
+	purchasedTicketGAID := int32(13)
+	availableTicketBalconyID := int32(14)
+
+	teardown := func() {
+		_, err := suite.Conn.Exec(
+			ctx,
+			"delete from tickets where event_id = $1",
+			readEventID,
+		)
+		if err != nil {
+			assert.FailNow(t, "Unable to clear test data on teardown")
+		}
+	}
+	setup := func() {
+		_, err := suite.Conn.Exec(
+			ctx,
+			`insert into tickets (id, event_id, purchaser_id, price, seat)
+            overriding system value
+            values
+                ($3, $1, null, 10, 'GA'),
+                ($4, $1, null, 10, 'GA'),
+                ($5, $1, $2, 10, 'GA'),
+                ($6, $1, null, 20, 'Balcony');
+            `,
+			readEventID,
+			userID,
+			availableTicketGAIDs[0],
+			availableTicketGAIDs[1],
+			purchasedTicketGAID,
+			availableTicketBalconyID,
+		)
+		if err != nil {
+			assert.FailNow(t, "Unable to write test data on setup")
+		}
+	}
+
+	teardown()
+	setup()
+	defer teardown()
+
+	api := CreateAPIForTickets(suite)
+	response := api.Get(fmt.Sprintf("/events/%d/tickets", readEventID))
+	require.Equal(t, http.StatusOK, response.Code)
+
+	expected := pkgApi.GetAvailableTicketsAggregateResponse{
+		Available: []pkgApi.GetAvailableTicketsAggregate{
+			{Seat: "GA", Price: 10, TicketIDs: availableTicketGAIDs},
+			{Seat: "Balcony", Price: 20, TicketIDs: []int32{availableTicketBalconyID}},
+		},
+	}
+
+	actual := pkgApi.GetAvailableTicketsAggregateResponse{}
+	json.NewDecoder(response.Body).Decode(&actual)
+
+	assert.EqualValues(t, expected, actual)
+}
+
+// Test fetching tickets for a non-existent or deleted event.
+func (suite *HandlersTestSuite) TestGetTicketsWhenEventDoesntExistOrDeleted() {
+	t := suite.T()
+	api := CreateAPIForTickets(suite)
+
+	for _, id := range []int32{missingEventID, deletedEventID} {
+		path := fmt.Sprintf("/events/%d/tickets", id)
+		response := api.Get(path)
 		assert.Equal(t, http.StatusNotFound, response.Code)
 	}
 }

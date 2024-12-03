@@ -68,6 +68,68 @@ func (b *LinkPerformersBatchResults) Close() error {
 	return b.br.Close()
 }
 
+const writeNewTickets = `-- name: WriteNewTickets :batchone
+insert into tickets (event_id, purchaser_id, price, seat)
+select events.id, null, $1, $2
+from events
+where
+    events.id = $3
+    and events.deleted = false
+returning id
+`
+
+type WriteNewTicketsBatchResults struct {
+	br     pgx.BatchResults
+	tot    int
+	closed bool
+}
+
+type WriteNewTicketsParams struct {
+	Price   int32
+	Seat    string
+	EventID int32
+}
+
+// The inserted record's id is returned so that the generated query will return
+// an error (`sql.ErrNoRows`) if no record is inserted due to the where clause
+// not finding a matching event.
+func (q *Queries) WriteNewTickets(ctx context.Context, arg []WriteNewTicketsParams) *WriteNewTicketsBatchResults {
+	batch := &pgx.Batch{}
+	for _, a := range arg {
+		vals := []interface{}{
+			a.Price,
+			a.Seat,
+			a.EventID,
+		}
+		batch.Queue(writeNewTickets, vals...)
+	}
+	br := q.db.SendBatch(ctx, batch)
+	return &WriteNewTicketsBatchResults{br, len(arg), false}
+}
+
+func (b *WriteNewTicketsBatchResults) QueryRow(f func(int, int32, error)) {
+	defer b.br.Close()
+	for t := 0; t < b.tot; t++ {
+		var id int32
+		if b.closed {
+			if f != nil {
+				f(t, id, ErrBatchAlreadyClosed)
+			}
+			continue
+		}
+		row := b.br.QueryRow()
+		err := row.Scan(&id)
+		if f != nil {
+			f(t, id, err)
+		}
+	}
+}
+
+func (b *WriteNewTicketsBatchResults) Close() error {
+	b.closed = true
+	return b.br.Close()
+}
+
 const writePerformers = `-- name: WritePerformers :batchexec
 insert into performers (name) values ($1)
 on conflict (name) do nothing

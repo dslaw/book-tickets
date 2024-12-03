@@ -129,3 +129,25 @@ func TestMapGetEventRowsWhenEmptyResultSet(t *testing.T) {
 	actual := repos.MapGetEventRows(rows)
 	assert.Empty(t, actual)
 }
+
+func TestMapGetTicketRows(t *testing.T) {
+	rows := []db.GetAvailableTicketsRow{
+		{Ticket: db.Ticket{ID: 1, EventID: 1, PurchaserID: pgtype.Int4{Int32: 1, Valid: true}, Price: 10, Seat: "GA"}},
+		{Ticket: db.Ticket{ID: 2, EventID: 1, PurchaserID: pgtype.Int4{Int32: 0, Valid: false}, Price: 10, Seat: "GA"}},
+		{Ticket: db.Ticket{ID: 3, EventID: 1, PurchaserID: pgtype.Int4{Int32: 0, Valid: false}, Price: 20, Seat: "Balcony"}},
+	}
+	expected := []entities.Ticket{
+		{ID: 1, EventID: 1, PurchaserID: 1, IsPurchased: true, Price: uint8(10), Seat: "GA"},
+		{ID: 2, EventID: 1, PurchaserID: 0, IsPurchased: false, Price: uint8(10), Seat: "GA"},
+		{ID: 3, EventID: 1, PurchaserID: 0, IsPurchased: false, Price: uint8(20), Seat: "Balcony"},
+	}
+
+	actual := repos.MapGetAvailableTicketRows(rows)
+	assert.EqualValues(t, expected, actual)
+}
+
+func TestMapGetTicketRowsWhenEmptyResultSet(t *testing.T) {
+	rows := []db.GetAvailableTicketsRow{}
+	actual := repos.MapGetAvailableTicketRows(rows)
+	assert.Empty(t, actual)
+}

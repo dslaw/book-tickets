@@ -31,7 +31,6 @@ type GetVenueResponse struct {
 		Subdivision string `json:"subdivision"`
 		CountryCode string `json:"country_code"`
 	} `json:"location"`
-	// TODO: Add upcoming events
 }
 
 type GetVenueResponseEnvelope struct {
@@ -82,4 +81,28 @@ type GetEventResponse struct {
 
 type GetEventResponseEnvelope struct {
 	Body GetEventResponse
+}
+
+type WriteTicketRelease struct {
+	Number uint8  `json:"number" minimum:"0"`
+	Seat   string `json:"seat" minLength:"1" maxLength:"10"`
+	Price  uint8  `json:"price" minimum:"0"`
+}
+
+type WriteTicketReleaseRequest struct {
+	TicketReleases []WriteTicketRelease `json:"ticket_releases"`
+}
+
+type GetAvailableTicketsAggregate struct {
+	Seat      string  `json:"seat"`
+	Price     uint8   `json:"price"`
+	TicketIDs []int32 `json:"ticket_ids"`
+}
+
+type GetAvailableTicketsAggregateResponse struct {
+	Available []GetAvailableTicketsAggregate `json:"available"`
+}
+
+type GetAvailableTicketsAggregateResponseEnvelope struct {
+	Body GetAvailableTicketsAggregateResponse
 }
