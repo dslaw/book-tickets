@@ -65,7 +65,7 @@ func TestVenuesRepoCreateVenueWhenTableConstraintViolation(t *testing.T) {
 }
 
 func TestVenuesRepoGetVenue(t *testing.T) {
-	ret := db.GetVenueRow{
+	row := db.GetVenueRow{
 		Venue: db.Venue{
 			ID:          venueID,
 			Name:        "Test Venue",
@@ -78,7 +78,7 @@ func TestVenuesRepoGetVenue(t *testing.T) {
 	}
 
 	mockQueries := new(MockQuerier)
-	mockQueries.On("GetVenue", mock.Anything, venueID).Return(ret, nil)
+	mockQueries.On("GetVenue", mock.Anything, venueID).Return(row, nil)
 
 	expected := entities.Venue{
 		ID:          venueID,
@@ -474,6 +474,47 @@ func TestTicketsRepoExecWriteTickets(t *testing.T) {
 	mockQueries.AssertCalled(t, "WriteNewTickets", mock.Anything, params)
 }
 
+func TestTicketsRepoGetTicket(t *testing.T) {
+	ticketID := int32(1)
+	row := db.GetTicketRow{
+		Ticket: db.Ticket{
+			ID:          ticketID,
+			EventID:     int32(11),
+			PurchaserID: pgtype.Int4{Int32: 0, Valid: false},
+			Price:       int32(25),
+			Seat:        "GA",
+		},
+	}
+
+	mockQueries := new(MockQuerier)
+	mockQueries.On("GetTicket", mock.Anything, ticketID).Return(row, nil)
+
+	repo := repos.NewTicketsRepoFromQueries(mockQueries)
+	actual, err := repo.GetTicket(context.Background(), ticketID)
+
+	assert.EqualValues(t, entities.Ticket{
+		ID:          ticketID,
+		EventID:     int32(11),
+		PurchaserID: 0,
+		IsPurchased: false,
+		Price:       uint8(25),
+		Seat:        "GA",
+	}, actual)
+	assert.Nil(t, err)
+}
+
+func TestTicketsRepoGetTicketWhenDoesntExist(t *testing.T) {
+	ticketID := int32(1)
+	mockQueries := new(MockQuerier)
+	mockQueries.On("GetTicket", mock.Anything, ticketID).Return(db.GetTicketRow{}, sql.ErrNoRows)
+
+	repo := repos.NewTicketsRepoFromQueries(mockQueries)
+	actual, err := repo.GetTicket(context.Background(), ticketID)
+
+	assert.Empty(t, actual)
+	assert.ErrorIs(t, err, repos.ErrNoSuchEntity)
+}
+
 func TestTicketsRepoGetAvailableTickets(t *testing.T) {
 	eventID := int32(1)
 	ctx := context.Background()
@@ -512,4 +553,42 @@ func TestTicketsRepoGetAvailableTicketsWhenEventDoesntExistOrDeleted(t *testing.
 
 	assert.ErrorIs(t, repos.ErrNoSuchEntity, err)
 	mockQueries.AssertCalled(t, "GetAvailableTickets", ctx, eventID)
+}
+
+func TestTicketsRepoSetTicketPurchaser(t *testing.T) {
+	ctx := context.Background()
+	ticketID := int32(1)
+	purchaserID := int32(11)
+	params := db.SetTicketPurchaserParams{
+		PurchaserID: pgtype.Int4{Int32: purchaserID, Valid: true},
+		TicketID:    ticketID,
+	}
+
+	mockQueries := new(MockQuerier)
+	mockQueries.On("SetTicketPurchaser", ctx, params).Return(ticketID, nil)
+
+	repo := repos.NewTicketsRepoFromQueries(mockQueries)
+	err := repo.SetTicketPurchaser(ctx, ticketID, purchaserID)
+
+	assert.Nil(t, err)
+	mockQueries.AssertCalled(t, "SetTicketPurchaser", ctx, params)
+}
+
+func TestTicketsRepoSetTicketPurchaserWhenTicketDoesntExistOrPurchased(t *testing.T) {
+	ctx := context.Background()
+	ticketID := int32(1)
+	purchaserID := int32(11)
+	params := db.SetTicketPurchaserParams{
+		PurchaserID: pgtype.Int4{Int32: purchaserID, Valid: true},
+		TicketID:    ticketID,
+	}
+
+	mockQueries := new(MockQuerier)
+	mockQueries.On("SetTicketPurchaser", ctx, params).Return(int32(0), sql.ErrNoRows)
+
+	repo := repos.NewTicketsRepoFromQueries(mockQueries)
+	err := repo.SetTicketPurchaser(ctx, ticketID, purchaserID)
+
+	assert.ErrorIs(t, repos.ErrNoSuchEntity, err)
+	mockQueries.AssertCalled(t, "SetTicketPurchaser", ctx, params)
 }

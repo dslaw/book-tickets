@@ -204,6 +204,32 @@ func (q *Queries) GetEvent(ctx context.Context, eventID int32) ([]GetEventRow, e
 	return items, nil
 }
 
+const getTicket = `-- name: GetTicket :one
+select tickets.id, tickets.event_id, tickets.purchaser_id, tickets.price, tickets.seat
+from tickets
+inner join events on tickets.event_id = events.id
+where 
+    tickets.id = $1
+    and events.deleted = false
+`
+
+type GetTicketRow struct {
+	Ticket Ticket
+}
+
+func (q *Queries) GetTicket(ctx context.Context, ticketID int32) (GetTicketRow, error) {
+	row := q.db.QueryRow(ctx, getTicket, ticketID)
+	var i GetTicketRow
+	err := row.Scan(
+		&i.Ticket.ID,
+		&i.Ticket.EventID,
+		&i.Ticket.PurchaserID,
+		&i.Ticket.Price,
+		&i.Ticket.Seat,
+	)
+	return i, err
+}
+
 const getVenue = `-- name: GetVenue :one
 select venues.id, venues.name, venues.description, venues.address, venues.city, venues.subdivision, venues.country_code, venues.deleted
 from venues
@@ -261,6 +287,27 @@ type LinkUpdatedPerformersParams struct {
 func (q *Queries) LinkUpdatedPerformers(ctx context.Context, arg LinkUpdatedPerformersParams) error {
 	_, err := q.db.Exec(ctx, linkUpdatedPerformers, arg.EventID, arg.Names)
 	return err
+}
+
+const setTicketPurchaser = `-- name: SetTicketPurchaser :one
+update tickets
+set purchaser_id = $1
+where
+    id = $2
+    and purchaser_id is null
+returning id
+`
+
+type SetTicketPurchaserParams struct {
+	PurchaserID pgtype.Int4
+	TicketID    int32
+}
+
+func (q *Queries) SetTicketPurchaser(ctx context.Context, arg SetTicketPurchaserParams) (int32, error) {
+	row := q.db.QueryRow(ctx, setTicketPurchaser, arg.PurchaserID, arg.TicketID)
+	var id int32
+	err := row.Scan(&id)
+	return id, err
 }
 
 const trimUpdatedEventPerformers = `-- name: TrimUpdatedEventPerformers :exec

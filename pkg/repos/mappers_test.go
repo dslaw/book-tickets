@@ -33,6 +33,12 @@ func TestMapTime(t *testing.T) {
 	assert.Equal(t, true, actual.Valid)
 }
 
+func TestMapPurchaserID(t *testing.T) {
+	purchaserID := int32(1)
+	actual := repos.MapPurchaserID(purchaserID)
+	assert.Equal(t, pgtype.Int4{Int32: purchaserID, Valid: true}, actual)
+}
+
 func TestMapGetEventRows(t *testing.T) {
 	startsAt, _ := time.Parse(time.DateOnly, "2020-01-01")
 	endsAt, _ := time.Parse(time.DateOnly, "2020-01-01")
@@ -130,7 +136,28 @@ func TestMapGetEventRowsWhenEmptyResultSet(t *testing.T) {
 	assert.Empty(t, actual)
 }
 
-func TestMapGetTicketRows(t *testing.T) {
+func TestMapTicket(t *testing.T) {
+	model := db.Ticket{
+		ID:          int32(1),
+		EventID:     int32(11),
+		PurchaserID: pgtype.Int4{Int32: 0, Valid: false},
+		Price:       int32(25),
+		Seat:        "GA",
+	}
+	expected := entities.Ticket{
+		ID:          int32(1),
+		EventID:     int32(11),
+		PurchaserID: int32(0),
+		IsPurchased: false,
+		Price:       uint8(25),
+		Seat:        "GA",
+	}
+
+	actual := repos.MapTicket(model)
+	assert.EqualValues(t, expected, actual)
+}
+
+func TestMapGetAvailableTicketRows(t *testing.T) {
 	rows := []db.GetAvailableTicketsRow{
 		{Ticket: db.Ticket{ID: 1, EventID: 1, PurchaserID: pgtype.Int4{Int32: 1, Valid: true}, Price: 10, Seat: "GA"}},
 		{Ticket: db.Ticket{ID: 2, EventID: 1, PurchaserID: pgtype.Int4{Int32: 0, Valid: false}, Price: 10, Seat: "GA"}},
@@ -146,7 +173,7 @@ func TestMapGetTicketRows(t *testing.T) {
 	assert.EqualValues(t, expected, actual)
 }
 
-func TestMapGetTicketRowsWhenEmptyResultSet(t *testing.T) {
+func TestMapGetAvailableTicketRowsWhenEmptyResultSet(t *testing.T) {
 	rows := []db.GetAvailableTicketsRow{}
 	actual := repos.MapGetAvailableTicketRows(rows)
 	assert.Empty(t, actual)

@@ -15,9 +15,11 @@ type Querier interface {
 	DeleteVenue(ctx context.Context, venueID int32) (int64, error)
 	GetAvailableTickets(ctx context.Context, eventID int32) ([]GetAvailableTicketsRow, error)
 	GetEvent(ctx context.Context, eventID int32) ([]GetEventRow, error)
+	GetTicket(ctx context.Context, ticketID int32) (GetTicketRow, error)
 	GetVenue(ctx context.Context, venueID int32) (GetVenueRow, error)
 	LinkPerformers(ctx context.Context, arg []LinkPerformersParams) *LinkPerformersBatchResults
 	LinkUpdatedPerformers(ctx context.Context, arg LinkUpdatedPerformersParams) error
+	SetTicketPurchaser(ctx context.Context, arg SetTicketPurchaserParams) (int32, error)
 	TrimUpdatedEventPerformers(ctx context.Context, eventID int32) error
 	// The updated record's id is returned so that the generated query will return
 	// an error (`sql.ErrNoRows`) if no record matches the where clause and no

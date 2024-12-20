@@ -14,19 +14,22 @@ import (
 
 	"github.com/danielgtaylor/huma/v2/humatest"
 	pkgApi "github.com/dslaw/book-tickets/pkg/api"
+	"github.com/dslaw/book-tickets/pkg/cache"
 	"github.com/dslaw/book-tickets/pkg/db"
 	"github.com/dslaw/book-tickets/pkg/repos"
 	"github.com/dslaw/book-tickets/pkg/services"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/joho/godotenv/autoload"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
 
 const (
-	userID = int32(1)
+	userID       = int32(1)
+	userIDString = "1"
 
 	readVenueID    = int32(1)
 	updateVenueID  = int32(2)
@@ -37,6 +40,12 @@ const (
 	updateEventID  = int32(2)
 	deletedEventID = int32(3)
 	missingEventID = int32(999)
+
+	ticketID       = int32(1)
+	ticketIDString = "1"
+
+	cacheHashKey             = "ticket-holds"
+	ticketHoldDurationString = "1m"
 )
 
 func ClearTestDatabase(ctx context.Context, conn *pgxpool.Pool) error {
@@ -104,9 +113,40 @@ values
 	return err
 }
 
+// WriteTicket sets up a ticket that can have a purchase hold set for it.
+func WriteTicket(t *testing.T, ctx context.Context, conn *pgxpool.Pool) {
+	_, err := conn.Exec(
+		ctx,
+		`insert into tickets (id, event_id, purchaser_id, price, seat)
+            overriding system value
+            values ($1, $2, null, 20, 'Balcony');`,
+		ticketID,
+		readEventID,
+	)
+	if err != nil {
+		assert.FailNow(t, "Unable to write test data on setup")
+	}
+}
+
+// DeleteTicket deletes the ticket inserted by `WriteTicket`.
+func DeleteTicket(t *testing.T, ctx context.Context, conn *pgxpool.Pool) {
+	_, err := conn.Exec(ctx, "delete from tickets where id = $1", ticketID)
+	if err != nil {
+		assert.FailNow(t, "Unable to delete test data on teardown")
+	}
+}
+
+func TeardownTicketHolds(t *testing.T, ctx context.Context, conn *redis.Client) {
+	err := conn.Del(ctx, cacheHashKey).Err()
+	if err != nil {
+		assert.FailNow(t, fmt.Sprintf("Error removing ticket hold on teardown: %s", err))
+	}
+}
+
 type HandlersTestSuite struct {
 	suite.Suite
-	Conn *pgxpool.Pool
+	Conn      *pgxpool.Pool
+	RedisConn *redis.Client
 }
 
 func (suite *HandlersTestSuite) SetupSuite() {
@@ -120,6 +160,12 @@ func (suite *HandlersTestSuite) SetupSuite() {
 		assert.FailNow(suite.T(), "Unable to connect to test database")
 	}
 
+	testRedisURL := os.Getenv("TEST_CACHE_URL_LOCAL")
+	opts, err := redis.ParseURL(testRedisURL)
+	if err != nil {
+		assert.FailNow(suite.T(), "Unable to connect to test Redis")
+	}
+
 	// Set up test data.
 	if err = ClearTestDatabase(ctx, conn); err != nil {
 		assert.FailNow(suite.T(), "Unable to clear test data on setup")
@@ -129,10 +175,12 @@ func (suite *HandlersTestSuite) SetupSuite() {
 	}
 
 	suite.Conn = conn
+	suite.RedisConn = redis.NewClient(opts)
 }
 
 func (suite *HandlersTestSuite) TeardownSuite() {
 	defer suite.Conn.Close()
+	defer suite.RedisConn.Close()
 
 	if err := ClearTestDatabase(context.Background(), suite.Conn); err != nil {
 		assert.FailNow(suite.T(), "Unable to clear test data on teardown")
@@ -157,7 +205,13 @@ func CreateAPIForEvents(suite *HandlersTestSuite) humatest.TestAPI {
 
 func CreateAPIForTickets(suite *HandlersTestSuite) humatest.TestAPI {
 	t := suite.T()
-	service := services.NewTicketsService(repos.NewTicketsRepo(suite.Conn))
+	ticketHoldDuration, _ := time.ParseDuration(ticketHoldDurationString)
+	service := services.NewTicketsService(
+		repos.NewTicketsRepo(suite.Conn),
+		cache.NewTicketHoldClient(suite.RedisConn, cacheHashKey),
+		&services.Time{},
+		ticketHoldDuration,
+	)
 	_, api := humatest.New(t)
 	pkgApi.RegisterTicketsHandlers(api, service)
 	return api
@@ -727,6 +781,8 @@ func (suite *HandlersTestSuite) TestGetTickets() {
 	availableTicketGAIDs := []int32{11, 12}
 	purchasedTicketGAID := int32(13)
 	availableTicketBalconyID := int32(14)
+	heldTicketBalconyID := int32(15)
+	heldTicketBalconyIDString := "15"
 
 	teardown := func() {
 		_, err := suite.Conn.Exec(
@@ -734,6 +790,11 @@ func (suite *HandlersTestSuite) TestGetTickets() {
 			"delete from tickets where event_id = $1",
 			readEventID,
 		)
+		if err != nil {
+			assert.FailNow(t, "Unable to clear test data on teardown")
+		}
+
+		err = suite.RedisConn.HDel(ctx, cacheHashKey, heldTicketBalconyIDString).Err()
 		if err != nil {
 			assert.FailNow(t, "Unable to clear test data on teardown")
 		}
@@ -747,7 +808,8 @@ func (suite *HandlersTestSuite) TestGetTickets() {
                 ($3, $1, null, 10, 'GA'),
                 ($4, $1, null, 10, 'GA'),
                 ($5, $1, $2, 10, 'GA'),
-                ($6, $1, null, 20, 'Balcony');
+                ($6, $1, null, 20, 'Balcony'),
+                ($7, $1, null, 20, 'Balcony');
             `,
 			readEventID,
 			userID,
@@ -755,13 +817,18 @@ func (suite *HandlersTestSuite) TestGetTickets() {
 			availableTicketGAIDs[1],
 			purchasedTicketGAID,
 			availableTicketBalconyID,
+			heldTicketBalconyID,
 		)
+		if err != nil {
+			assert.FailNow(t, "Unable to write test data on setup")
+		}
+
+		err = suite.RedisConn.HSet(ctx, cacheHashKey, heldTicketBalconyIDString, "123").Err()
 		if err != nil {
 			assert.FailNow(t, "Unable to write test data on setup")
 		}
 	}
 
-	teardown()
 	setup()
 	defer teardown()
 
@@ -779,7 +846,7 @@ func (suite *HandlersTestSuite) TestGetTickets() {
 	actual := pkgApi.GetAvailableTicketsAggregateResponse{}
 	json.NewDecoder(response.Body).Decode(&actual)
 
-	assert.EqualValues(t, expected, actual)
+	assert.ElementsMatch(t, expected.Available, actual.Available)
 }
 
 // Test fetching tickets for a non-existent or deleted event.
@@ -792,6 +859,154 @@ func (suite *HandlersTestSuite) TestGetTicketsWhenEventDoesntExistOrDeleted() {
 		response := api.Get(path)
 		assert.Equal(t, http.StatusNotFound, response.Code)
 	}
+}
+
+// Test placing a purchase hold on a ticket.
+func (suite *HandlersTestSuite) TestHoldTicket() {
+	t := suite.T()
+	ctx := context.Background()
+
+	userID := "123"
+	header := fmt.Sprintf("x-user-id: %s", userID)
+
+	WriteTicket(t, ctx, suite.Conn)
+	defer TeardownTicketHolds(t, ctx, suite.RedisConn)
+	defer DeleteTicket(t, ctx, suite.Conn)
+
+	api := CreateAPIForTickets(suite)
+
+	response := api.Post(fmt.Sprintf("/tickets/%d/hold", ticketID), header)
+	require.Equal(t, http.StatusNoContent, response.Code)
+
+	actual, err := suite.RedisConn.HGet(ctx, cacheHashKey, ticketIDString).Result()
+	if err != nil {
+		assert.FailNow(t, fmt.Sprintf("Error reading ticket hold: %s", err))
+	}
+
+	actualExpireTime, err := suite.RedisConn.HExpireTime(ctx, cacheHashKey, ticketIDString).Result()
+	if err != nil {
+		assert.FailNow(t, fmt.Sprintf("Error reading expiration time: %s", err))
+	}
+
+	assert.Equal(t, userID, actual)
+	// `HExpireTime` accepts multiple fields, and returns an array of equal
+	// length to the number of input fields.
+	assert.Equal(t, 1, len(actualExpireTime))
+	assert.Greater(t, time.Unix(actualExpireTime[0], 0), time.Now())
+}
+
+// Test placing a purchase hold on a non-existent ticket.
+func (suite *HandlersTestSuite) TestHoldTicketWhenTicketDoesntExist() {
+	t := suite.T()
+
+	header := "x-user-id: 123"
+	ticketID := 999
+
+	api := CreateAPIForTickets(suite)
+
+	response := api.Post(fmt.Sprintf("/tickets/%d/hold", ticketID), header)
+	require.Equal(t, http.StatusNotFound, response.Code)
+}
+
+// Test placing a purchase hold on an already held ticket.
+func (suite *HandlersTestSuite) TestHoldTicketWhenTicketAlreadyHeld() {
+	t := suite.T()
+	ctx := context.Background()
+
+	userID := "123"
+	header := fmt.Sprintf("x-user-id: %s", userID)
+	ticketID := 1
+	ticketIDString := "1"
+
+	setup := func() {
+		WriteTicket(t, ctx, suite.Conn)
+
+		_, err := suite.RedisConn.HSet(
+			ctx,
+			cacheHashKey,
+			ticketIDString,
+			userID,
+		).Result()
+		if err != nil {
+			assert.FailNow(t, fmt.Sprintf("Error writing ticket hold: %s", err))
+		}
+	}
+
+	setup()
+	defer DeleteTicket(t, ctx, suite.Conn)
+	defer TeardownTicketHolds(t, ctx, suite.RedisConn)
+
+	api := CreateAPIForTickets(suite)
+
+	response := api.Post(fmt.Sprintf("/tickets/%d/hold", ticketID), header)
+	require.Equal(t, http.StatusUnprocessableEntity, response.Code)
+}
+
+// Test purchasing a ticket that already has a purchase hold on it.
+func (suite *HandlersTestSuite) TestPurchaseTicket() {
+	t := suite.T()
+
+	ctx := context.Background()
+	header := fmt.Sprintf("x-user-id: %s", userIDString)
+
+	// Add a ticket to be purchased set a purchase hold on it.
+	setup := func() {
+		WriteTicket(t, ctx, suite.Conn)
+
+		err := suite.RedisConn.HSet(ctx, cacheHashKey, ticketIDString, userID).Err()
+		if err != nil {
+			assert.FailNow(t, "Unable to write test data on setup")
+		}
+	}
+
+	setup()
+	defer TeardownTicketHolds(t, ctx, suite.RedisConn)
+	defer DeleteTicket(t, ctx, suite.Conn)
+
+	api := CreateAPIForTickets(suite)
+	response := api.Post(fmt.Sprintf("/tickets/%d/purchase", ticketID), header)
+	require.Equal(t, http.StatusOK, response.Code)
+
+	actual := pkgApi.PaymentResponse{}
+	json.NewDecoder(response.Body).Decode(&actual)
+	assert.Equal(t, true, actual.Success)
+}
+
+// Test attempting to purchase a ticket that doesn't have a purchase hold on it.
+func (suite *HandlersTestSuite) TestPurchaseTicketWhenTicketIsntHeld() {
+	t := suite.T()
+	header := "x-user-id: 111"
+	ticketID := int32(999)
+
+	api := CreateAPIForTickets(suite)
+	response := api.Post(fmt.Sprintf("/tickets/%d/purchase", ticketID), header)
+	require.Equal(t, http.StatusUnprocessableEntity, response.Code)
+}
+
+// Test attempting to purchase a ticket that has a hold placed on it, but the
+// hold id doesn't match.
+func (suite *HandlersTestSuite) TestPurchaseTicketWhenWrongHoldID() {
+	t := suite.T()
+
+	ctx := context.Background()
+	header := "x-user-id: 123"
+	ticketID := int32(1)
+	ticketIDString := "1"
+	actualHoldID := "111"
+
+	setup := func() {
+		err := suite.RedisConn.HSet(ctx, cacheHashKey, ticketIDString, actualHoldID).Err()
+		if err != nil {
+			assert.FailNow(t, "Unable to write test data on setup")
+		}
+	}
+
+	setup()
+	defer TeardownTicketHolds(t, ctx, suite.RedisConn)
+
+	api := CreateAPIForTickets(suite)
+	response := api.Post(fmt.Sprintf("/tickets/%d/purchase", ticketID), header)
+	require.Equal(t, http.StatusUnprocessableEntity, response.Code)
 }
 
 func TestHandlersTestSuite(t *testing.T) {

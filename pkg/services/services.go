@@ -2,7 +2,10 @@ package services
 
 import (
 	"context"
+	"slices"
+	"time"
 
+	"github.com/dslaw/book-tickets/pkg/cache"
 	"github.com/dslaw/book-tickets/pkg/entities"
 	"github.com/dslaw/book-tickets/pkg/repos"
 )
@@ -64,14 +67,43 @@ func (svc *EventsService) DeleteEvent(ctx context.Context, id int32) error {
 	return svc.repo.DeleteEvent(ctx, id)
 }
 
+// TicketsRepoer provides necessary methods for database operations against
+// tickets.
+type TicketsRepoer interface {
+	GetAvailableTickets(context.Context, int32) ([]entities.Ticket, error)
+	GetTicket(context.Context, int32) (entities.Ticket, error)
+	SetTicketPurchaser(context.Context, int32, int32) error
+	WriteTickets(context.Context, []entities.Ticket) error
+}
+
+// TimeProvider provides a method to fetch the current time. This allows for
+// dependency injection to facilitate testing.
+type TimeProvider interface {
+	Now() time.Time
+}
+
 type TicketsService struct {
-	repo *repos.TicketsRepo
+	repo               TicketsRepoer
+	ticketHoldClient   cache.CacheClienter
+	time               TimeProvider
+	TicketHoldDuration time.Duration
 }
 
-func NewTicketsService(repo *repos.TicketsRepo) *TicketsService {
-	return &TicketsService{repo: repo}
+func NewTicketsService(
+	repo TicketsRepoer,
+	ticketHoldClient cache.CacheClienter,
+	time TimeProvider,
+	ticketHoldDuration time.Duration,
+) *TicketsService {
+	return &TicketsService{
+		repo:               repo,
+		ticketHoldClient:   ticketHoldClient,
+		time:               time,
+		TicketHoldDuration: ticketHoldDuration,
+	}
 }
 
+// AddTickets creates new tickets for the given event.
 func (svc *TicketsService) AddTickets(
 	ctx context.Context,
 	eventID int32,
@@ -80,6 +112,7 @@ func (svc *TicketsService) AddTickets(
 	return svc.repo.WriteTickets(ctx, tickets)
 }
 
+// AggregateTickets groups tickets for an event by seat.
 func (svc *TicketsService) AggregateTickets(tickets []entities.Ticket) []entities.AvailableTicketAggregate {
 	grouped := make(map[string][]entities.Ticket)
 	for _, ticket := range tickets {
@@ -119,10 +152,81 @@ func (svc *TicketsService) AggregateTickets(tickets []entities.Ticket) []entitie
 	return aggregates
 }
 
+// GetAvailableTickets fetches available (not purchased) tickets for the vent
+// given by the event id.
 func (svc *TicketsService) GetAvailableTickets(ctx context.Context, eventID int32) ([]entities.AvailableTicketAggregate, error) {
 	tickets, err := svc.repo.GetAvailableTickets(ctx, eventID)
 	if err != nil {
-		return []entities.AvailableTicketAggregate{}, err
+		return nil, err
 	}
+
+	// Check for tickets that have a purchase hold on them and filter them out.
+	cacheFields := make([]string, len(tickets))
+	for idx, ticket := range tickets {
+		cacheFields[idx] = svc.ticketHoldClient.MakeField(ticket.ID)
+	}
+
+	ticketHolds, err := svc.ticketHoldClient.HashMultiGet(ctx, cacheFields...)
+	if err != nil {
+		return nil, err
+	}
+
+	tickets = slices.DeleteFunc(tickets, func(ticket entities.Ticket) bool {
+		field := svc.ticketHoldClient.MakeField(ticket.ID)
+		_, hasHold := ticketHolds[field]
+		return hasHold
+	})
+
 	return svc.AggregateTickets(tickets), nil
+}
+
+// SetTicketHold places a time-bounded purchase hold on the ticket given by the
+// ticket id.
+func (svc *TicketsService) SetTicketHold(ctx context.Context, ticketID int32, holdID string) error {
+	if holdID == "" {
+		return ErrInvalidHoldID
+	}
+
+	// Check that the ticket exists, with lack of an error indicating that it
+	// exists.
+	_, err := svc.repo.GetTicket(ctx, ticketID)
+	if err != nil {
+		return err
+	}
+
+	field := svc.ticketHoldClient.MakeField(ticketID)
+	err = svc.ticketHoldClient.HashSet(ctx, field, holdID)
+	if err != nil {
+		return err
+	}
+	expiresAt := svc.time.Now().UTC().Add(svc.TicketHoldDuration)
+	return svc.ticketHoldClient.HashExpireAt(ctx, field, expiresAt)
+}
+
+// GetHeldTicket fetches the ticket given by `ticketID`, if it is currently held
+// and the given hold id matches the current purchase hold.
+func (svc *TicketsService) GetHeldTicket(ctx context.Context, ticketID int32, holdID string) (ticket entities.Ticket, err error) {
+	if holdID == "" {
+		err = ErrInvalidHoldID
+		return
+	}
+
+	// Check that the ticket is held, and that the hold id matches the given
+	// hold id, before fetching the ticket.
+	field := svc.ticketHoldClient.MakeField(ticketID)
+	actualHoldID, err := svc.ticketHoldClient.HashGet(ctx, field)
+	if err != nil {
+		return
+	}
+	if actualHoldID != holdID {
+		err = ErrHoldIDMismatch
+		return
+	}
+
+	ticket, err = svc.repo.GetTicket(ctx, ticketID)
+	return
+}
+
+func (svc *TicketsService) SetTicketPurchaser(ctx context.Context, ticketID int32, purchaserID int32) error {
+	return svc.repo.SetTicketPurchaser(ctx, ticketID, purchaserID)
 }

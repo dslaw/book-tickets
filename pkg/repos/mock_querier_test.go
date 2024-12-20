@@ -41,6 +41,11 @@ func (mock *MockQuerier) GetEvent(ctx context.Context, id int32) ([]db.GetEventR
 	return args.Get(0).([]db.GetEventRow), args.Error(1)
 }
 
+func (mock *MockQuerier) GetTicket(ctx context.Context, id int32) (db.GetTicketRow, error) {
+	args := mock.Called(ctx, id)
+	return args.Get(0).(db.GetTicketRow), args.Error(1)
+}
+
 func (mock *MockQuerier) GetVenue(ctx context.Context, venueID int32) (db.GetVenueRow, error) {
 	args := mock.Called(ctx, venueID)
 	return args.Get(0).(db.GetVenueRow), args.Error(1)
@@ -54,6 +59,11 @@ func (mock *MockQuerier) LinkPerformers(ctx context.Context, params []db.LinkPer
 func (mock *MockQuerier) LinkUpdatedPerformers(ctx context.Context, params db.LinkUpdatedPerformersParams) error {
 	args := mock.Called(ctx, params)
 	return args.Error(0)
+}
+
+func (mock *MockQuerier) SetTicketPurchaser(ctx context.Context, params db.SetTicketPurchaserParams) (int32, error) {
+	args := mock.Called(ctx, params)
+	return args.Get(0).(int32), args.Error(1)
 }
 
 func (mock *MockQuerier) TrimUpdatedEventPerformers(ctx context.Context, id int32) error {

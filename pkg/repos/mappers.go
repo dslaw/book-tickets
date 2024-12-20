@@ -16,6 +16,10 @@ func MapTime(t time.Time) pgtype.Timestamptz {
 	return pgtype.Timestamptz{Time: t, Valid: true}
 }
 
+func MapPurchaserID(id int32) pgtype.Int4 {
+	return pgtype.Int4{Int32: id, Valid: true}
+}
+
 func MapGetEventRows(rows []db.GetEventRow) entities.Event {
 	if len(rows) == 0 {
 		return entities.Event{}
@@ -48,17 +52,21 @@ func MapGetEventRows(rows []db.GetEventRow) entities.Event {
 	}
 }
 
+func MapTicket(model db.Ticket) entities.Ticket {
+	return entities.Ticket{
+		ID:          model.ID,
+		EventID:     model.EventID,
+		PurchaserID: model.PurchaserID.Int32,
+		IsPurchased: model.PurchaserID.Valid,
+		Price:       uint8(model.Price),
+		Seat:        model.Seat,
+	}
+}
+
 func MapGetAvailableTicketRows(rows []db.GetAvailableTicketsRow) []entities.Ticket {
 	tickets := make([]entities.Ticket, len(rows))
 	for idx, row := range rows {
-		tickets[idx] = entities.Ticket{
-			ID:          row.Ticket.ID,
-			EventID:     row.Ticket.EventID,
-			PurchaserID: row.Ticket.PurchaserID.Int32,
-			IsPurchased: row.Ticket.PurchaserID.Valid,
-			Price:       uint8(row.Ticket.Price),
-			Seat:        row.Ticket.Seat,
-		}
+		tickets[idx] = MapTicket(row.Ticket)
 	}
 	return tickets
 }

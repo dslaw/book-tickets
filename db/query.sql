@@ -123,6 +123,14 @@ with delete_event as (
 )
 select count(*) from delete_event;
 
+-- name: GetTicket :one
+select sqlc.embed(tickets)
+from tickets
+inner join events on tickets.event_id = events.id
+where 
+    tickets.id = @ticket_id
+    and events.deleted = false;
+
 -- name: GetAvailableTickets :many
 select sqlc.embed(tickets)
 from tickets
@@ -142,4 +150,12 @@ from events
 where
     events.id = @event_id
     and events.deleted = false
+returning id;
+
+-- name: SetTicketPurchaser :one
+update tickets
+set purchaser_id = @purchaser_id
+where
+    id = @ticket_id
+    and purchaser_id is null
 returning id;

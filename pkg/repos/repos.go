@@ -342,6 +342,19 @@ func (r *TicketsRepo) WriteTickets(ctx context.Context, tickets []entities.Ticke
 	return nil
 }
 
+// GetTicket fetches the ticket, given by id, from the database of record.
+func (r *TicketsRepo) GetTicket(ctx context.Context, id int32) (entities.Ticket, error) {
+	row, err := r.queries.GetTicket(ctx, id)
+	if err != nil {
+		ticket := entities.Ticket{}
+		if errors.Is(err, sql.ErrNoRows) {
+			return ticket, ErrNoSuchEntity
+		}
+		return ticket, err
+	}
+	return MapTicket(row.Ticket), nil
+}
+
 // GetAvailableTickets fetches tickets that are available for purchase, for the
 // given event.
 func (r *TicketsRepo) GetAvailableTickets(ctx context.Context, eventID int32) ([]entities.Ticket, error) {
@@ -354,4 +367,21 @@ func (r *TicketsRepo) GetAvailableTickets(ctx context.Context, eventID int32) ([
 	}
 
 	return MapGetAvailableTicketRows(rows), nil
+}
+
+// SetTicketPurchaser updates a ticket to mark that it has been purchased by the
+// user given by `purchaserID`.
+func (r *TicketsRepo) SetTicketPurchaser(ctx context.Context, ticketID int32, purchaserID int32) error {
+	params := db.SetTicketPurchaserParams{
+		PurchaserID: MapPurchaserID(purchaserID),
+		TicketID:    ticketID,
+	}
+	_, err := r.queries.SetTicketPurchaser(ctx, params)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNoSuchEntity
+		}
+		return err
+	}
+	return nil
 }

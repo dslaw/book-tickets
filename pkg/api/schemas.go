@@ -106,3 +106,20 @@ type GetAvailableTicketsAggregateResponse struct {
 type GetAvailableTicketsAggregateResponseEnvelope struct {
 	Body GetAvailableTicketsAggregateResponse
 }
+
+type Card struct {
+	Name            string `json:"name" minLength:"1"`
+	Address         string `json:"address" minLength:"1"`
+	Number          string `json:"number" minLength:"10" maxLength:"19"`
+	ExpirationMonth uint8  `json:"expiration_month" minimum:"1" maximum:"12"`
+	ExpirationYear  uint8  `json:"expiration_year"`
+	CVC             string `json:"cvc" minLength:"3" maxLength:"3"`
+}
+
+type PaymentResponse struct {
+	Success bool `json:"success"`
+}
+
+type PaymentResponseEnvelope struct {
+	Body PaymentResponse
+}
