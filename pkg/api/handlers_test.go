@@ -124,7 +124,7 @@ func WriteTicket(t *testing.T, ctx context.Context, conn *pgxpool.Pool) {
 		readEventID,
 	)
 	if err != nil {
-		assert.FailNow(t, "Unable to write test data on setup")
+		assert.FailNow(t, fmt.Sprintf("Unable to write test data on setup: %s", err))
 	}
 }
 
@@ -132,7 +132,7 @@ func WriteTicket(t *testing.T, ctx context.Context, conn *pgxpool.Pool) {
 func DeleteTicket(t *testing.T, ctx context.Context, conn *pgxpool.Pool) {
 	_, err := conn.Exec(ctx, "delete from tickets where id = $1", ticketID)
 	if err != nil {
-		assert.FailNow(t, "Unable to delete test data on teardown")
+		assert.FailNow(t, fmt.Sprintf("Unable to delete test data on teardown: %s", err))
 	}
 }
 
@@ -157,21 +157,21 @@ func (suite *HandlersTestSuite) SetupSuite() {
 	dbConfig.MaxConns = 1
 	conn, err := pgxpool.NewWithConfig(ctx, dbConfig)
 	if err != nil {
-		assert.FailNow(suite.T(), "Unable to connect to test database")
+		assert.FailNow(suite.T(), fmt.Sprintf("Unable to connect to test database: %s", err))
 	}
 
 	testRedisURL := os.Getenv("TEST_CACHE_URL_LOCAL")
 	opts, err := redis.ParseURL(testRedisURL)
 	if err != nil {
-		assert.FailNow(suite.T(), "Unable to connect to test Redis")
+		assert.FailNow(suite.T(), fmt.Sprintf("Unable to connect to test Redis: %s", err))
 	}
 
 	// Set up test data.
 	if err = ClearTestDatabase(ctx, conn); err != nil {
-		assert.FailNow(suite.T(), "Unable to clear test data on setup")
+		assert.FailNow(suite.T(), fmt.Sprintf("Unable to clear test data on setup: %s", err))
 	}
 	if err = WriteTestData(ctx, conn); err != nil {
-		assert.FailNow(suite.T(), "Unable to write test data on setup")
+		assert.FailNow(suite.T(), fmt.Sprintf("Unable to write test data on setup: %s", err))
 	}
 
 	suite.Conn = conn
@@ -183,7 +183,7 @@ func (suite *HandlersTestSuite) TeardownSuite() {
 	defer suite.RedisConn.Close()
 
 	if err := ClearTestDatabase(context.Background(), suite.Conn); err != nil {
-		assert.FailNow(suite.T(), "Unable to clear test data on teardown")
+		assert.FailNow(suite.T(), fmt.Sprintf("Unable to clear test data on teardown: %s", err))
 	}
 }
 
@@ -383,7 +383,7 @@ overriding system value
 values ($1, 'Test venue to delete', '99 Front Street', 'San Francisco', 'CA', 'USA')
 `, toDeleteVenueID)
 	if err != nil {
-		assert.FailNow(t, "Unable to write test data")
+		assert.FailNow(t, fmt.Sprintf("Unable to write test data: %s", err))
 	}
 
 	api := CreateAPIForVenues(suite)
@@ -422,7 +422,7 @@ func (suite *HandlersTestSuite) TestCreateEvent() {
 		preExistingPerformerName,
 	)
 	if err != nil {
-		assert.FailNow(t, "Unable to write test data")
+		assert.FailNow(t, fmt.Sprintf("Unable to write test data: %s", err))
 	}
 
 	teardown := func() error {
@@ -432,7 +432,7 @@ func (suite *HandlersTestSuite) TestCreateEvent() {
 			preExistingPerformerName,
 		)
 		if err != nil {
-			assert.FailNow(t, "Unable to clean-up test data")
+			assert.FailNow(t, fmt.Sprintf("Unable to clean-up test data: %s", err))
 		}
 		return nil
 	}
@@ -683,7 +683,7 @@ overriding system value
 values ($1, $2, 'Test event to delete', '2020-01-01:00:00.00Z', '2020-01-01:00:00.00Z')
 `, toDeleteEventID, readVenueID)
 	if err != nil {
-		assert.FailNow(t, "Unable to write test data")
+		assert.FailNow(t, fmt.Sprintf("Unable to write test data: %s", err))
 	}
 
 	api := CreateAPIForEvents(suite)
@@ -791,12 +791,12 @@ func (suite *HandlersTestSuite) TestGetTickets() {
 			readEventID,
 		)
 		if err != nil {
-			assert.FailNow(t, "Unable to clear test data on teardown")
+			assert.FailNow(t, fmt.Sprintf("Unable to clear test data on teardown: %s", err))
 		}
 
 		err = suite.RedisConn.HDel(ctx, cacheHashKey, heldTicketBalconyIDString).Err()
 		if err != nil {
-			assert.FailNow(t, "Unable to clear test data on teardown")
+			assert.FailNow(t, fmt.Sprintf("Unable to clear test data on teardown: %s", err))
 		}
 	}
 	setup := func() {
@@ -820,12 +820,12 @@ func (suite *HandlersTestSuite) TestGetTickets() {
 			heldTicketBalconyID,
 		)
 		if err != nil {
-			assert.FailNow(t, "Unable to write test data on setup")
+			assert.FailNow(t, fmt.Sprintf("Unable to write test data on setup: %s", err))
 		}
 
 		err = suite.RedisConn.HSet(ctx, cacheHashKey, heldTicketBalconyIDString, "123").Err()
 		if err != nil {
-			assert.FailNow(t, "Unable to write test data on setup")
+			assert.FailNow(t, fmt.Sprintf("Unable to write test data on setup: %s", err))
 		}
 	}
 
@@ -955,7 +955,7 @@ func (suite *HandlersTestSuite) TestPurchaseTicket() {
 
 		err := suite.RedisConn.HSet(ctx, cacheHashKey, ticketIDString, userID).Err()
 		if err != nil {
-			assert.FailNow(t, "Unable to write test data on setup")
+			assert.FailNow(t, fmt.Sprintf("Unable to write test data on setup: %s", err))
 		}
 	}
 
@@ -997,7 +997,7 @@ func (suite *HandlersTestSuite) TestPurchaseTicketWhenWrongHoldID() {
 	setup := func() {
 		err := suite.RedisConn.HSet(ctx, cacheHashKey, ticketIDString, actualHoldID).Err()
 		if err != nil {
-			assert.FailNow(t, "Unable to write test data on setup")
+			assert.FailNow(t, fmt.Sprintf("Unable to write test data on setup: %s", err))
 		}
 	}
 
