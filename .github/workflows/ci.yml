@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.22'
+
+      - name: Set up env file
+        run: cp .env-dev .env
+
+      - name: Lint
+        run: |
+          go vet ./...
+
+          gofmt_output=$(gofmt -l .)
+          echo ${gofmt_output}
+          if [[ -n $gofmt_output ]]; then
+            echo "Go code is not formatted, run `gofmt -w -s ./...`"
+            exit 1
+          fi 
+
+      - name: Run unit tests
+        run: go test -short ./...
+
+      - name: Build container
+        run: docker compose build app
+
+      - name: Run database schema migrations
+        run: docker compose run --rm dbmigrations -e TEST_DATABASE_URL up
+
+      - name: Run tests
+        run: |
+          set -a && source .env
+          docker compose up -d
+          go test ./...
