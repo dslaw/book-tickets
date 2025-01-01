@@ -90,6 +90,7 @@ func RegisterVenuesHandlers(api huma.API, service *services.VenuesService) {
 }
 
 func RegisterEventsHandlers(api huma.API, service *services.EventsService) {
+	// Create a new event.
 	huma.Post(api, "/events", func(ctx context.Context, input *struct {
 		Body WriteEventRequest
 	}) (*CreateEventResponseEnvelope, error) {
