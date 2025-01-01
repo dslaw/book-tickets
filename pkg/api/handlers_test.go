@@ -109,8 +109,27 @@ values
 		updateEventID,
 		deletedEventID,
 	)
+	if err != nil {
+		return err
+	}
 
-	return err
+	// Update primary key sequences so that the generated values don't collide
+	// with id values that have been specified, or inserts will error.
+	// The number 10 is arbitrary, and just needs to be greater than the largest
+	// manually specified value.
+	statements := []string{
+		"alter sequence events_id_seq restart with 10",
+		"alter sequence venues_id_seq restart with 10",
+		"alter sequence users_id_seq restart with 10",
+	}
+	for _, stmt := range statements {
+		_, err := conn.Exec(ctx, stmt)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // WriteTicket sets up a ticket that can have a purchase hold set for it.
@@ -178,7 +197,7 @@ func (suite *HandlersTestSuite) SetupSuite() {
 	suite.RedisConn = redis.NewClient(opts)
 }
 
-func (suite *HandlersTestSuite) TeardownSuite() {
+func (suite *HandlersTestSuite) TearDownSuite() {
 	defer suite.Conn.Close()
 	defer suite.RedisConn.Close()
 
