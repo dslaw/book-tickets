@@ -10,7 +10,7 @@ type Config struct {
 	DatabaseURL        string
 	Port               string
 	CacheURL           string
-	TicketHoldCacheKey string
+	TicketHoldPrefix   string
 	TicketHoldDuration time.Duration
 }
 
@@ -30,7 +30,7 @@ func NewConfig() (*Config, bool) {
 		return nil, false
 	}
 
-	ticketHoldCacheKey, ok := os.LookupEnv("TICKET_HOLD_CACHE_KEY")
+	ticketHoldPrefix, ok := os.LookupEnv("TICKET_HOLD_PREFIX")
 	if !ok {
 		return nil, false
 	}
@@ -49,7 +49,7 @@ func NewConfig() (*Config, bool) {
 		DatabaseURL:        databaseURL,
 		Port:               port,
 		CacheURL:           cacheURL,
-		TicketHoldCacheKey: ticketHoldCacheKey,
+		TicketHoldPrefix:   ticketHoldPrefix,
 		TicketHoldDuration: ticketHoldDuration,
 	}, true
 }

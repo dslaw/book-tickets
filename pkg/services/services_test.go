@@ -21,27 +21,22 @@ func (mock *MockCacheClient) Close() error {
 	return args.Error(0)
 }
 
-func (mock *MockCacheClient) HashExpireAt(ctx context.Context, field string, tm time.Time) error {
-	args := mock.Called(ctx, field, tm)
-	return args.Error(0)
-}
-
-func (mock *MockCacheClient) HashGet(ctx context.Context, field string) (string, error) {
-	args := mock.Called(ctx, field)
+func (mock *MockCacheClient) Get(ctx context.Context, key string) (string, error) {
+	args := mock.Called(ctx, key)
 	return args.String(0), args.Error(1)
 }
 
-func (mock *MockCacheClient) HashSet(ctx context.Context, field, value string) error {
-	args := mock.Called(ctx, field, value)
+func (mock *MockCacheClient) Set(ctx context.Context, key, value string, expiration time.Duration) error {
+	args := mock.Called(ctx, key, value, expiration)
 	return args.Error(0)
 }
 
-func (mock *MockCacheClient) HashMultiGet(ctx context.Context, fields ...string) (map[string]string, error) {
-	args := mock.Called(ctx, fields)
+func (mock *MockCacheClient) GetMany(ctx context.Context, keys ...string) (map[string]string, error) {
+	args := mock.Called(ctx, keys)
 	return args.Get(0).(map[string]string), args.Error(1)
 }
 
-func (mock *MockCacheClient) MakeField(id int32) string {
+func (mock *MockCacheClient) MakeKey(id int32) string {
 	args := mock.Called(id)
 	return args.Get(0).(string)
 }
@@ -70,15 +65,6 @@ func (mock *MockTicketsRepo) WriteTickets(ctx context.Context, tickets []entitie
 	return args.Error(0)
 }
 
-type MockTime struct {
-	mock.Mock
-}
-
-func (mock *MockTime) Now() time.Time {
-	args := mock.Called()
-	return args.Get(0).(time.Time)
-}
-
 func TestTicketsServiceAggregateTickets(t *testing.T) {
 	service := &services.TicketsService{}
 	tickets := []entities.Ticket{
@@ -101,28 +87,20 @@ func TestTicketsServiceSetTicketHold(t *testing.T) {
 	ticketID := int32(1)
 	field := "1"
 	holdID := "123"
-	now := time.Now()
-	expiresAt := now.UTC().Add(ticketHoldDuration)
 
 	mockRepo := new(MockTicketsRepo)
 	mockRepo.On("GetTicket", mock.Anything, ticketID).Return(entities.Ticket{}, nil)
 
 	mockClient := new(MockCacheClient)
-	mockClient.On("MakeField", ticketID).Return(field)
-	mockClient.On("HashSet", mock.Anything, field, holdID).Return(nil)
-	mockClient.On("HashExpireAt", mock.Anything, field, expiresAt).Return(nil)
+	mockClient.On("MakeKey", ticketID).Return(field)
+	mockClient.On("Set", mock.Anything, field, holdID, ticketHoldDuration).Return(nil)
 
-	mockTime := new(MockTime)
-	mockTime.On("Now").Return(now)
-
-	service := services.NewTicketsService(mockRepo, mockClient, mockTime, ticketHoldDuration)
+	service := services.NewTicketsService(mockRepo, mockClient, ticketHoldDuration)
 	err := service.SetTicketHold(context.Background(), ticketID, holdID)
 
 	assert.Nil(t, err)
-	mockClient.AssertCalled(t, "MakeField", ticketID)
-	mockClient.AssertCalled(t, "HashSet", mock.Anything, field, holdID)
-	mockClient.AssertCalled(t, "HashExpireAt", mock.Anything, field, expiresAt)
-	mockTime.AssertCalled(t, "Now")
+	mockClient.AssertCalled(t, "MakeKey", ticketID)
+	mockClient.AssertCalled(t, "Set", mock.Anything, field, holdID, ticketHoldDuration)
 }
 
 func TestTicketsServiceSetTicketHoldWhenTicketDoesntExist(t *testing.T) {
@@ -136,7 +114,7 @@ func TestTicketsServiceSetTicketHoldWhenTicketDoesntExist(t *testing.T) {
 		repos.ErrNoSuchEntity,
 	)
 
-	service := services.NewTicketsService(mockRepo, nil, nil, ticketHoldDuration)
+	service := services.NewTicketsService(mockRepo, nil, ticketHoldDuration)
 	err := service.SetTicketHold(context.Background(), ticketID, holdID)
 
 	assert.ErrorIs(t, repos.ErrNoSuchEntity, err)
@@ -150,10 +128,10 @@ func TestTicketsServiceGetHeldTicketWhenHoldIDMismatch(t *testing.T) {
 	actualHoldID := "111"
 
 	mockClient := new(MockCacheClient)
-	mockClient.On("MakeField", ticketID).Return(field)
-	mockClient.On("HashGet", mock.Anything, field).Return(actualHoldID, nil)
+	mockClient.On("MakeKey", ticketID).Return(field)
+	mockClient.On("Get", mock.Anything, field).Return(actualHoldID, nil)
 
-	service := services.NewTicketsService(nil, mockClient, nil, ticketHoldDuration)
+	service := services.NewTicketsService(nil, mockClient, ticketHoldDuration)
 	ticket, err := service.GetHeldTicket(context.Background(), ticketID, holdID)
 
 	assert.Empty(t, ticket)

@@ -3,7 +3,7 @@ package cache
 import (
 	"context"
 	"errors"
-	"strconv"
+	"fmt"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -11,28 +11,30 @@ import (
 
 type CacheClienter interface {
 	Close() error
-	HashExpireAt(context.Context, string, time.Time) error
-	HashGet(context.Context, string) (string, error)
-	HashSet(context.Context, string, string) error
-	HashMultiGet(context.Context, ...string) (map[string]string, error)
-	MakeField(int32) string
+	Get(context.Context, string) (string, error)
+	Set(context.Context, string, string, time.Duration) error
+	GetMany(context.Context, ...string) (map[string]string, error)
+	MakeKey(int32) string
 }
 
 type TicketHoldClient struct {
-	conn    *redis.Client
-	hashKey string
+	conn             *redis.Client
+	ticketHoldPrefix string
 }
 
-func NewTicketHoldClient(conn *redis.Client, hashKey string) *TicketHoldClient {
-	return &TicketHoldClient{conn: conn, hashKey: hashKey}
+func NewTicketHoldClient(conn *redis.Client, ticketHoldPrefix string) *TicketHoldClient {
+	return &TicketHoldClient{conn: conn, ticketHoldPrefix: ticketHoldPrefix}
 }
 
-func NewTicketHoldClientFromURL(url, hashKey string) (*TicketHoldClient, error) {
+func NewTicketHoldClientFromURL(url string, ticketHoldPrefix string) (*TicketHoldClient, error) {
 	opts, err := redis.ParseURL(url)
 	if err != nil {
 		return nil, err
 	}
-	return &TicketHoldClient{conn: redis.NewClient(opts), hashKey: hashKey}, nil
+	return &TicketHoldClient{
+		conn:             redis.NewClient(opts),
+		ticketHoldPrefix: ticketHoldPrefix,
+	}, nil
 }
 
 // Close closes the underlying Redis connection.
@@ -40,17 +42,17 @@ func (repo *TicketHoldClient) Close() error {
 	return repo.conn.Close()
 }
 
-// MakeField creates a Redis map field, i.e. a string, from a ticket's id.
-func (repo *TicketHoldClient) MakeField(id int32) string {
-	return strconv.FormatInt(int64(id), 10)
+// MakeKey creates a Redis key, i.e. a string, from a ticket's id.
+func (repo *TicketHoldClient) MakeKey(id int32) string {
+	return fmt.Sprintf("%s%d", repo.ticketHoldPrefix, id)
 }
 
-func (repo *TicketHoldClient) HashExpireAt(ctx context.Context, field string, expirationTime time.Time) error {
-	return repo.conn.HExpireAt(ctx, repo.hashKey, expirationTime, field).Err()
+func (repo *TicketHoldClient) ExpireAt(ctx context.Context, key string, expirationTime time.Time) error {
+	return repo.conn.ExpireAt(ctx, key, expirationTime).Err()
 }
 
-func (repo *TicketHoldClient) HashGet(ctx context.Context, field string) (string, error) {
-	result, err := repo.conn.HGet(ctx, repo.hashKey, field).Result()
+func (repo *TicketHoldClient) Get(ctx context.Context, key string) (string, error) {
+	result, err := repo.conn.Get(ctx, key).Result()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			return result, ErrNotFound
@@ -60,34 +62,39 @@ func (repo *TicketHoldClient) HashGet(ctx context.Context, field string) (string
 	return result, nil
 }
 
-func (repo *TicketHoldClient) HashSet(ctx context.Context, field string, value string) error {
-	fieldSet, err := repo.conn.HSetNX(ctx, repo.hashKey, field, value).Result()
+func (repo *TicketHoldClient) Set(
+	ctx context.Context,
+	key string,
+	value string,
+	expiration time.Duration,
+) error {
+	keySet, err := repo.conn.SetNX(ctx, key, value, expiration).Result()
 	if err != nil {
 		return err
 	}
-	if !fieldSet {
-		// A response of 0 / false indicates that the field already exists.
+	if !keySet {
+		// A response of 0 / false indicates that the key already exists.
 		return ErrAlreadyHasHold
 	}
 
 	return nil
 }
 
-func (repo *TicketHoldClient) JoinHMGetResults(fields []string, values []interface{}) map[string]string {
+func (repo *TicketHoldClient) JoinMGetResults(keys []string, values []interface{}) map[string]string {
 	joined := make(map[string]string)
 	for idx, value := range values {
 		if value != nil {
-			field := fields[idx]
-			joined[field] = value.(string)
+			key := keys[idx]
+			joined[key] = value.(string)
 		}
 	}
 	return joined
 }
 
-func (repo *TicketHoldClient) HashMultiGet(ctx context.Context, fields ...string) (map[string]string, error) {
-	result, err := repo.conn.HMGet(ctx, repo.hashKey, fields...).Result()
+func (repo *TicketHoldClient) GetMany(ctx context.Context, keys ...string) (map[string]string, error) {
+	result, err := repo.conn.MGet(ctx, keys...).Result()
 	if err != nil {
 		return nil, err
 	}
-	return repo.JoinHMGetResults(fields, result), nil
+	return repo.JoinMGetResults(keys, result), nil
 }

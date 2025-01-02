@@ -44,7 +44,6 @@ const (
 	ticketID       = int32(1)
 	ticketIDString = "1"
 
-	cacheHashKey             = "ticket-holds"
 	ticketHoldDurationString = "1m"
 )
 
@@ -156,7 +155,8 @@ func DeleteTicket(t *testing.T, ctx context.Context, conn *pgxpool.Pool) {
 }
 
 func TeardownTicketHolds(t *testing.T, ctx context.Context, conn *redis.Client) {
-	err := conn.Del(ctx, cacheHashKey).Err()
+	keys, err := conn.Keys(ctx, "*").Result()
+	err = conn.Del(ctx, keys...).Err()
 	if err != nil {
 		assert.FailNow(t, fmt.Sprintf("Error removing ticket hold on teardown: %s", err))
 	}
@@ -227,8 +227,7 @@ func CreateAPIForTickets(suite *HandlersTestSuite) humatest.TestAPI {
 	ticketHoldDuration, _ := time.ParseDuration(ticketHoldDurationString)
 	service := services.NewTicketsService(
 		repos.NewTicketsRepo(suite.Conn),
-		cache.NewTicketHoldClient(suite.RedisConn, cacheHashKey),
-		&services.Time{},
+		cache.NewTicketHoldClient(suite.RedisConn, ""),
 		ticketHoldDuration,
 	)
 	_, api := humatest.New(t)
@@ -813,7 +812,7 @@ func (suite *HandlersTestSuite) TestGetTickets() {
 			assert.FailNow(t, fmt.Sprintf("Unable to clear test data on teardown: %s", err))
 		}
 
-		err = suite.RedisConn.HDel(ctx, cacheHashKey, heldTicketBalconyIDString).Err()
+		err = suite.RedisConn.Del(ctx, heldTicketBalconyIDString).Err()
 		if err != nil {
 			assert.FailNow(t, fmt.Sprintf("Unable to clear test data on teardown: %s", err))
 		}
@@ -842,7 +841,7 @@ func (suite *HandlersTestSuite) TestGetTickets() {
 			assert.FailNow(t, fmt.Sprintf("Unable to write test data on setup: %s", err))
 		}
 
-		err = suite.RedisConn.HSet(ctx, cacheHashKey, heldTicketBalconyIDString, "123").Err()
+		err = suite.RedisConn.Set(ctx, heldTicketBalconyIDString, "123", 0).Err()
 		if err != nil {
 			assert.FailNow(t, fmt.Sprintf("Unable to write test data on setup: %s", err))
 		}
@@ -897,21 +896,18 @@ func (suite *HandlersTestSuite) TestHoldTicket() {
 	response := api.Post(fmt.Sprintf("/tickets/%d/hold", ticketID), header)
 	require.Equal(t, http.StatusNoContent, response.Code)
 
-	actual, err := suite.RedisConn.HGet(ctx, cacheHashKey, ticketIDString).Result()
+	actual, err := suite.RedisConn.Get(ctx, ticketIDString).Result()
 	if err != nil {
 		assert.FailNow(t, fmt.Sprintf("Error reading ticket hold: %s", err))
 	}
 
-	actualExpireTime, err := suite.RedisConn.HExpireTime(ctx, cacheHashKey, ticketIDString).Result()
+	actualExpireTime, err := suite.RedisConn.ExpireTime(ctx, ticketIDString).Result()
 	if err != nil {
 		assert.FailNow(t, fmt.Sprintf("Error reading expiration time: %s", err))
 	}
 
 	assert.Equal(t, userID, actual)
-	// `HExpireTime` accepts multiple fields, and returns an array of equal
-	// length to the number of input fields.
-	assert.Equal(t, 1, len(actualExpireTime))
-	assert.Greater(t, time.Unix(actualExpireTime[0], 0), time.Now())
+	assert.Greater(t, actualExpireTime.Milliseconds(), int64(0))
 }
 
 // Test placing a purchase hold on a non-existent ticket.
@@ -940,12 +936,7 @@ func (suite *HandlersTestSuite) TestHoldTicketWhenTicketAlreadyHeld() {
 	setup := func() {
 		WriteTicket(t, ctx, suite.Conn)
 
-		_, err := suite.RedisConn.HSet(
-			ctx,
-			cacheHashKey,
-			ticketIDString,
-			userID,
-		).Result()
+		_, err := suite.RedisConn.Set(ctx, ticketIDString, userID, 0).Result()
 		if err != nil {
 			assert.FailNow(t, fmt.Sprintf("Error writing ticket hold: %s", err))
 		}
@@ -972,7 +963,7 @@ func (suite *HandlersTestSuite) TestPurchaseTicket() {
 	setup := func() {
 		WriteTicket(t, ctx, suite.Conn)
 
-		err := suite.RedisConn.HSet(ctx, cacheHashKey, ticketIDString, userID).Err()
+		err := suite.RedisConn.Set(ctx, ticketIDString, userID, 0).Err()
 		if err != nil {
 			assert.FailNow(t, fmt.Sprintf("Unable to write test data on setup: %s", err))
 		}
@@ -1014,7 +1005,7 @@ func (suite *HandlersTestSuite) TestPurchaseTicketWhenWrongHoldID() {
 	actualHoldID := "111"
 
 	setup := func() {
-		err := suite.RedisConn.HSet(ctx, cacheHashKey, ticketIDString, actualHoldID).Err()
+		err := suite.RedisConn.Set(ctx, ticketIDString, actualHoldID, 0).Err()
 		if err != nil {
 			assert.FailNow(t, fmt.Sprintf("Unable to write test data on setup: %s", err))
 		}

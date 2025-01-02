@@ -7,18 +7,18 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestTicketHoldRepoMakeField(t *testing.T) {
+func TestTicketHoldRepoMakeKey(t *testing.T) {
 	id := int32(123)
 	repo := cache.TicketHoldClient{}
-	actual := repo.MakeField(id)
+	actual := repo.MakeKey(id)
 	assert.Equal(t, "123", actual)
 }
 
-func TestTicketHoldRepoJoinHMGetResults(t *testing.T) {
+func TestTicketHoldRepoJoinMGetResults(t *testing.T) {
 	fields := []string{"a", "b", "c"}
 	values := []interface{}{"1", nil, "3"}
 
 	repo := &cache.TicketHoldClient{}
-	actual := repo.JoinHMGetResults(fields, values)
+	actual := repo.JoinMGetResults(fields, values)
 	assert.Equal(t, map[string]string{"a": "1", "c": "3"}, actual)
 }

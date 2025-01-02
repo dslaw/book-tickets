@@ -76,29 +76,20 @@ type TicketsRepoer interface {
 	WriteTickets(context.Context, []entities.Ticket) error
 }
 
-// TimeProvider provides a method to fetch the current time. This allows for
-// dependency injection to facilitate testing.
-type TimeProvider interface {
-	Now() time.Time
-}
-
 type TicketsService struct {
 	repo               TicketsRepoer
 	ticketHoldClient   cache.CacheClienter
-	time               TimeProvider
 	TicketHoldDuration time.Duration
 }
 
 func NewTicketsService(
 	repo TicketsRepoer,
 	ticketHoldClient cache.CacheClienter,
-	time TimeProvider,
 	ticketHoldDuration time.Duration,
 ) *TicketsService {
 	return &TicketsService{
 		repo:               repo,
 		ticketHoldClient:   ticketHoldClient,
-		time:               time,
 		TicketHoldDuration: ticketHoldDuration,
 	}
 }
@@ -161,19 +152,19 @@ func (svc *TicketsService) GetAvailableTickets(ctx context.Context, eventID int3
 	}
 
 	// Check for tickets that have a purchase hold on them and filter them out.
-	cacheFields := make([]string, len(tickets))
+	cacheKeys := make([]string, len(tickets))
 	for idx, ticket := range tickets {
-		cacheFields[idx] = svc.ticketHoldClient.MakeField(ticket.ID)
+		cacheKeys[idx] = svc.ticketHoldClient.MakeKey(ticket.ID)
 	}
 
-	ticketHolds, err := svc.ticketHoldClient.HashMultiGet(ctx, cacheFields...)
+	ticketHolds, err := svc.ticketHoldClient.GetMany(ctx, cacheKeys...)
 	if err != nil {
 		return nil, err
 	}
 
 	tickets = slices.DeleteFunc(tickets, func(ticket entities.Ticket) bool {
-		field := svc.ticketHoldClient.MakeField(ticket.ID)
-		_, hasHold := ticketHolds[field]
+		key := svc.ticketHoldClient.MakeKey(ticket.ID)
+		_, hasHold := ticketHolds[key]
 		return hasHold
 	})
 
@@ -194,13 +185,8 @@ func (svc *TicketsService) SetTicketHold(ctx context.Context, ticketID int32, ho
 		return err
 	}
 
-	field := svc.ticketHoldClient.MakeField(ticketID)
-	err = svc.ticketHoldClient.HashSet(ctx, field, holdID)
-	if err != nil {
-		return err
-	}
-	expiresAt := svc.time.Now().UTC().Add(svc.TicketHoldDuration)
-	return svc.ticketHoldClient.HashExpireAt(ctx, field, expiresAt)
+	key := svc.ticketHoldClient.MakeKey(ticketID)
+	return svc.ticketHoldClient.Set(ctx, key, holdID, svc.TicketHoldDuration)
 }
 
 // GetHeldTicket fetches the ticket given by `ticketID`, if it is currently held
@@ -213,8 +199,8 @@ func (svc *TicketsService) GetHeldTicket(ctx context.Context, ticketID int32, ho
 
 	// Check that the ticket is held, and that the hold id matches the given
 	// hold id, before fetching the ticket.
-	field := svc.ticketHoldClient.MakeField(ticketID)
-	actualHoldID, err := svc.ticketHoldClient.HashGet(ctx, field)
+	key := svc.ticketHoldClient.MakeKey(ticketID)
+	actualHoldID, err := svc.ticketHoldClient.Get(ctx, key)
 	if err != nil {
 		return
 	}

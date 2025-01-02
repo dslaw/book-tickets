@@ -40,7 +40,7 @@ func main() {
 
 	ticketHoldClient, err := cache.NewTicketHoldClientFromURL(
 		config.CacheURL,
-		config.TicketHoldCacheKey,
+		config.TicketHoldPrefix,
 	)
 	if err != nil {
 		slog.Error("Unable to connect to Redis", "error", err)
@@ -53,7 +53,6 @@ func main() {
 	ticketsService := services.NewTicketsService(
 		repos.NewTicketsRepo(pool),
 		ticketHoldClient,
-		&services.Time{},
 		config.TicketHoldDuration,
 	)
 
