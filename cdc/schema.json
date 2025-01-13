@@ -1,0 +1,45 @@
+[
+    {
+        "database": "ticketing",
+        "index": "events",
+        "nodes": {
+            "table": "events",
+            "columns": [
+                "id",
+                "name",
+                "description",
+                "starts_at",
+                "ends_at",
+                "deleted"
+            ],
+            "children": [
+                {
+                    "table": "venues",
+                    "label": "venue",
+                    "columns": ["id", "name"],
+                    "relationship": {
+                        "variant": "object",
+                        "type": "one_to_one"
+                    }
+                }
+            ]
+        }
+    },
+    {
+        "database": "ticketing",
+        "index": "venues",
+        "nodes": {
+            "table": "venues",
+            "columns": [
+                "id",
+                "name",
+                "description",
+                "address",
+                "city",
+                "subdivision",
+                "country_code",
+                "deleted"
+            ]
+        }
+    }
+]

@@ -2,6 +2,10 @@ package api
 
 import "time"
 
+type ResponseEnvelope struct {
+	Body interface{}
+}
+
 type WriteVenueRequest struct {
 	Name        string `json:"name" minLength:"1" maxLength:"100"`
 	Description string `json:"description" required:"false" maxLength:"200"`
@@ -17,10 +21,6 @@ type CreateVenueResponse struct {
 	ID int32 `json:"id"`
 }
 
-type CreateVenueResponseEnvelope struct {
-	Body CreateVenueResponse
-}
-
 type GetVenueResponse struct {
 	ID          int32  `json:"id"`
 	Name        string `json:"name"`
@@ -31,10 +31,6 @@ type GetVenueResponse struct {
 		Subdivision string `json:"subdivision"`
 		CountryCode string `json:"country_code"`
 	} `json:"location"`
-}
-
-type GetVenueResponseEnvelope struct {
-	Body GetVenueResponse
 }
 
 type WritePerformerRequest struct {
@@ -50,13 +46,8 @@ type WriteEventRequest struct {
 	Performers  []WritePerformerRequest `json:"performers"`
 }
 
-// TODO: Can abstract these into a single CreateResourceResponse{Envelope}
 type CreateEventResponse struct {
 	ID int32 `json:"id"`
-}
-
-type CreateEventResponseEnvelope struct {
-	Body CreateEventResponse
 }
 
 type EventVenueResponse struct {
@@ -79,10 +70,6 @@ type GetEventResponse struct {
 	Performers  []EventPerformerResponse `json:"performers"`
 }
 
-type GetEventResponseEnvelope struct {
-	Body GetEventResponse
-}
-
 type WriteTicketRelease struct {
 	Number uint8  `json:"number" minimum:"0"`
 	Seat   string `json:"seat" minLength:"1" maxLength:"10"`
@@ -103,10 +90,6 @@ type GetAvailableTicketsAggregateResponse struct {
 	Available []GetAvailableTicketsAggregate `json:"available"`
 }
 
-type GetAvailableTicketsAggregateResponseEnvelope struct {
-	Body GetAvailableTicketsAggregateResponse
-}
-
 type Card struct {
 	Name            string `json:"name" minLength:"1"`
 	Address         string `json:"address" minLength:"1"`
@@ -120,6 +103,36 @@ type PaymentResponse struct {
 	Success bool `json:"success"`
 }
 
-type PaymentResponseEnvelope struct {
-	Body PaymentResponse
+type EventSearchResult struct {
+	ID          int32     `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	StartsAt    time.Time `json:"starts_at"`
+	EndsAt      time.Time `json:"ends_at"`
+	Venue       struct {
+		ID   int32  `json:"id"`
+		Name string `json:"name"`
+	} `json:"venue"`
+}
+
+type EventsSearchResponse struct {
+	Results []EventSearchResult `json:"results"`
+	Size    uint8               `json:"size"`
+}
+
+type VenueSearchResult struct {
+	ID          int32  `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Location    struct {
+		Address     string `json:"address"`
+		City        string `json:"city"`
+		Subdivision string `json:"subdivision"`
+		CountryCode string `json:"country_code"`
+	} `json:"location"`
+}
+
+type VenuesSearchResponse struct {
+	Results []VenueSearchResult `json:"results"`
+	Size    uint8               `json:"size"`
 }

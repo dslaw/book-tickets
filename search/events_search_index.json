@@ -1,0 +1,18 @@
+{
+    "mappings": {
+        "properties": {
+            "id": {"type": "unsigned_long"},
+            "name": {"type": "text"},
+            "description": {"type": "text"},
+            "starts_at": {"type": "date", "format": "strict_date_time"},
+            "ends_at": {"type": "date", "format": "strict_date_time"},
+            "venue": {
+                "properties": {
+                    "id": {"type": "unsigned_long"},
+                    "name": {"type": "text"}
+                }
+            },
+            "deleted": {"type": "boolean"}
+        }
+    }
+}

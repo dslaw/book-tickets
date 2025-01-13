@@ -17,10 +17,12 @@ import (
 	"github.com/dslaw/book-tickets/pkg/cache"
 	"github.com/dslaw/book-tickets/pkg/db"
 	"github.com/dslaw/book-tickets/pkg/repos"
+	"github.com/dslaw/book-tickets/pkg/search"
 	"github.com/dslaw/book-tickets/pkg/services"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/joho/godotenv/autoload"
+	"github.com/opensearch-project/opensearch-go/v4/opensearchapi"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -45,6 +47,11 @@ const (
 	ticketIDString = "1"
 
 	ticketHoldDurationString = "1m"
+
+	eventDocument1ID = "1"
+	eventDocument2ID = "2"
+	venueDocument1ID = "1"
+	venueDocument2ID = "2"
 )
 
 func ClearTestDatabase(ctx context.Context, conn *pgxpool.Pool) error {
@@ -162,10 +169,103 @@ func TeardownTicketHolds(t *testing.T, ctx context.Context, conn *redis.Client) 
 	}
 }
 
+// WriteSearchDocuments creates test event and venue documents in OpenSearch.
+func WriteSearchDocuments(
+	ctx context.Context,
+	client *opensearchapi.Client,
+	eventsIndex,
+	venuesIndex string,
+) error {
+	indexDocument := func(index, id, document string) error {
+		req := opensearchapi.IndexReq{
+			Index:      index,
+			DocumentID: id,
+			Body:       strings.NewReader(document),
+		}
+		_, err := client.Index(ctx, req)
+		return err
+	}
+
+	indexes := []string{eventsIndex, eventsIndex, venuesIndex, venuesIndex}
+	documentIDs := []string{eventDocument1ID, eventDocument2ID, venueDocument1ID, venueDocument2ID}
+	documents := []string{
+		`{
+            "id": 1,
+            "name": "Rock concert",
+            "starts_at": "2024-06-30T20:00:00.000Z",
+            "ends_at": "2024-06-30T23:00:00.000Z",
+            "venue": {"id": 1, "name": "Rock venue"},
+            "deleted": false
+        }`, `{
+            "id": 2,
+            "name": "Pop concert",
+            "starts_at": "2024-06-30T20:00:00.000Z",
+            "ends_at": "2024-06-30T23:00:00.000Z",
+            "venue": {"id": 2, "name": "Pop venue"},
+            "deleted": false
+        }`, `{
+            "id": 1,
+            "name": "Rock venue",
+            "address": "111 Front St",
+            "city": "San Francisco",
+            "subdivision": "CA",
+            "country_code": "USA",
+            "deleted": false
+        }`, `{
+            "id": 2,
+            "name": "Pop venue",
+            "address": "222 Front St",
+            "city": "San Francisco",
+            "subdivision": "CA",
+            "country_code": "USA",
+            "deleted": false
+        }`,
+	}
+
+	for idx, index := range indexes {
+		err := indexDocument(index, documentIDs[idx], documents[idx])
+		if err != nil {
+			return err
+		}
+	}
+
+	// Refresh indices to ensure that test data can be searched for immediately.
+	req := opensearchapi.IndicesRefreshReq{Indices: []string{eventsIndex, venuesIndex}}
+	_, err := client.Indices.Refresh(ctx, &req)
+	return err
+}
+
+// ClearSearchDocuments deletes documents created by `WriteSearchDocuments` from
+// OpenSearch.
+func ClearSearchDocuments(
+	ctx context.Context,
+	client *opensearchapi.Client,
+	eventsIndex,
+	venuesIndex string,
+) error {
+	indexes := []string{eventsIndex, eventsIndex, venuesIndex, venuesIndex}
+	documentIDs := []string{eventDocument1ID, eventDocument2ID, venueDocument1ID, venueDocument2ID}
+	for idx, index := range indexes {
+		req := opensearchapi.DocumentDeleteReq{
+			Index:      index,
+			DocumentID: documentIDs[idx],
+		}
+		_, err := client.Document.Delete(ctx, req)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 type HandlersTestSuite struct {
 	suite.Suite
-	Conn      *pgxpool.Pool
-	RedisConn *redis.Client
+	Conn              *pgxpool.Pool
+	RedisConn         *redis.Client
+	OpenSearchClient  *opensearchapi.Client
+	SearchEventsIndex string
+	SearchVenuesIndex string
 }
 
 func (suite *HandlersTestSuite) SetupSuite() {
@@ -185,6 +285,16 @@ func (suite *HandlersTestSuite) SetupSuite() {
 		assert.FailNow(suite.T(), fmt.Sprintf("Unable to connect to test Redis: %s", err))
 	}
 
+	openSearchURL := os.Getenv("TEST_SEARCH_URL_LOCAL")
+	openSearchUser := os.Getenv("SEARCH_USER")
+	openSearchPassword := os.Getenv("SEARCH_PASSWORD")
+	openSearchClient, err := search.NewHTTPClient(openSearchURL, openSearchUser, openSearchPassword)
+	if err != nil {
+		assert.FailNow(suite.T(), fmt.Sprintf("Unable to create OpenSearch client: %s", err))
+	}
+	searchEventsIndex := os.Getenv("TEST_SEARCH_EVENTS_INDEX")
+	searchVenuesIndex := os.Getenv("TEST_SEARCH_VENUES_INDEX")
+
 	// Set up test data.
 	if err = ClearTestDatabase(ctx, conn); err != nil {
 		assert.FailNow(suite.T(), fmt.Sprintf("Unable to clear test data on setup: %s", err))
@@ -193,15 +303,36 @@ func (suite *HandlersTestSuite) SetupSuite() {
 		assert.FailNow(suite.T(), fmt.Sprintf("Unable to write test data on setup: %s", err))
 	}
 
+	if err = WriteSearchDocuments(
+		ctx,
+		openSearchClient,
+		searchEventsIndex,
+		searchVenuesIndex,
+	); err != nil {
+		assert.FailNow(suite.T(), fmt.Sprintf("Unable to write test data on setup: %s", err))
+	}
+
 	suite.Conn = conn
 	suite.RedisConn = redis.NewClient(opts)
+	suite.OpenSearchClient = openSearchClient
+	suite.SearchEventsIndex = searchEventsIndex
+	suite.SearchVenuesIndex = searchVenuesIndex
 }
 
 func (suite *HandlersTestSuite) TearDownSuite() {
 	defer suite.Conn.Close()
 	defer suite.RedisConn.Close()
 
-	if err := ClearTestDatabase(context.Background(), suite.Conn); err != nil {
+	ctx := context.Background()
+	if err := ClearTestDatabase(ctx, suite.Conn); err != nil {
+		assert.FailNow(suite.T(), fmt.Sprintf("Unable to clear test data on teardown: %s", err))
+	}
+	if err := ClearSearchDocuments(
+		ctx,
+		suite.OpenSearchClient,
+		suite.SearchEventsIndex,
+		suite.SearchVenuesIndex,
+	); err != nil {
 		assert.FailNow(suite.T(), fmt.Sprintf("Unable to clear test data on teardown: %s", err))
 	}
 }
@@ -232,6 +363,19 @@ func CreateAPIForTickets(suite *HandlersTestSuite) humatest.TestAPI {
 	)
 	_, api := humatest.New(t)
 	pkgApi.RegisterTicketsHandlers(api, service)
+	return api
+}
+
+func CreateAPIForSearch(suite *HandlersTestSuite) humatest.TestAPI {
+	t := suite.T()
+	client := search.NewSearchClientFromHTTPClient(
+		suite.OpenSearchClient,
+		suite.SearchEventsIndex,
+		suite.SearchVenuesIndex,
+	)
+	service, _ := services.NewSearchService(client, 10)
+	_, api := humatest.New(t)
+	pkgApi.RegisterSearchHandlers(api, service)
 	return api
 }
 
@@ -1017,6 +1161,68 @@ func (suite *HandlersTestSuite) TestPurchaseTicketWhenWrongHoldID() {
 	api := CreateAPIForTickets(suite)
 	response := api.Post(fmt.Sprintf("/tickets/%d/purchase", ticketID), header)
 	require.Equal(t, http.StatusUnprocessableEntity, response.Code)
+}
+
+// Test searching for events.
+func (suite *HandlersTestSuite) TestSearchEvents() {
+	t := suite.T()
+
+	api := CreateAPIForSearch(suite)
+
+	response := api.Get("/search/events?q=rock")
+	require.Equal(t, http.StatusOK, response.Code)
+
+	expectedStartsAt, _ := time.Parse(time.RFC3339, "2024-06-30T20:00:00Z")
+	expectedEndsAt, _ := time.Parse(time.RFC3339, "2024-06-30T23:00:00Z")
+	expectedDocument := pkgApi.EventSearchResult{
+		ID:          1,
+		Name:        "Rock concert",
+		Description: "",
+		StartsAt:    expectedStartsAt,
+		EndsAt:      expectedEndsAt,
+	}
+	expectedDocument.Venue.ID = 1
+	expectedDocument.Venue.Name = "Rock venue"
+
+	expected := pkgApi.EventsSearchResponse{
+		Results: []pkgApi.EventSearchResult{expectedDocument},
+		Size:    1,
+	}
+
+	actual := pkgApi.EventsSearchResponse{}
+	json.NewDecoder(response.Body).Decode(&actual)
+
+	assert.Equal(t, expected, actual)
+}
+
+// Test searching for venues.
+func (suite *HandlersTestSuite) TestSearchVenues() {
+	t := suite.T()
+
+	api := CreateAPIForSearch(suite)
+
+	response := api.Get("/search/venues?q=rock")
+	require.Equal(t, http.StatusOK, response.Code)
+
+	expectedDocument := pkgApi.VenueSearchResult{
+		ID:          1,
+		Name:        "Rock venue",
+		Description: "",
+	}
+	expectedDocument.Location.Address = "111 Front St"
+	expectedDocument.Location.City = "San Francisco"
+	expectedDocument.Location.Subdivision = "CA"
+	expectedDocument.Location.CountryCode = "USA"
+
+	expected := pkgApi.VenuesSearchResponse{
+		Results: []pkgApi.VenueSearchResult{expectedDocument},
+		Size:    1,
+	}
+
+	actual := pkgApi.VenuesSearchResponse{}
+	json.NewDecoder(response.Body).Decode(&actual)
+
+	assert.Equal(t, expected, actual)
 }
 
 func TestHandlersTestSuite(t *testing.T) {

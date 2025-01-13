@@ -2,12 +2,14 @@ package services
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"time"
 
 	"github.com/dslaw/book-tickets/pkg/cache"
 	"github.com/dslaw/book-tickets/pkg/entities"
 	"github.com/dslaw/book-tickets/pkg/repos"
+	"github.com/dslaw/book-tickets/pkg/search"
 )
 
 type VenuesService struct {
@@ -215,4 +217,41 @@ func (svc *TicketsService) GetHeldTicket(ctx context.Context, ticketID int32, ho
 
 func (svc *TicketsService) SetTicketPurchaser(ctx context.Context, ticketID int32, purchaserID int32) error {
 	return svc.repo.SetTicketPurchaser(ctx, ticketID, purchaserID)
+}
+
+type SearchService struct {
+	client     search.SearchClienter
+	MaxResults int32
+}
+
+func NewSearchService(client search.SearchClienter, maxResults int32) (*SearchService, error) {
+	if maxResults <= 0 {
+		return nil, errors.New("`maxResults` must be positive")
+	}
+	return &SearchService{client: client, MaxResults: maxResults}, nil
+}
+
+func (svc *SearchService) SearchEvents(
+	ctx context.Context,
+	searchTerm string,
+	startTime time.Time,
+	limit int32,
+) ([]search.EventDocument, error) {
+	if limit > svc.MaxResults {
+		limit = svc.MaxResults
+	}
+
+	return svc.client.SearchEvents(ctx, searchTerm, startTime, limit)
+}
+
+func (svc *SearchService) SearchVenues(
+	ctx context.Context,
+	searchTerm string,
+	limit int32,
+) ([]search.VenueDocument, error) {
+	if limit > svc.MaxResults {
+		limit = svc.MaxResults
+	}
+
+	return svc.client.SearchVenues(ctx, searchTerm, limit)
 }

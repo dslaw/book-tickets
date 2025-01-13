@@ -1,6 +1,9 @@
 package api
 
-import "github.com/dslaw/book-tickets/pkg/entities"
+import (
+	"github.com/dslaw/book-tickets/pkg/entities"
+	"github.com/dslaw/book-tickets/pkg/search"
+)
 
 func MapToVenue(data WriteVenueRequest) entities.Venue {
 	return entities.Venue{
@@ -96,4 +99,42 @@ func MapToAvailableTicketsAggregateResponse(ticketAggregates []entities.Availabl
 		}
 	}
 	return GetAvailableTicketsAggregateResponse{Available: aggregates}
+}
+
+func MapToEventsSearchResponse(documents []search.EventDocument) EventsSearchResponse {
+	size := len(documents)
+	results := make([]EventSearchResult, size)
+	for idx, document := range documents {
+		result := EventSearchResult{
+			ID:          document.ID,
+			Name:        document.Name,
+			Description: document.Description,
+			StartsAt:    document.StartsAt,
+			EndsAt:      document.EndsAt,
+		}
+		result.Venue.ID = document.Venue.ID
+		result.Venue.Name = document.Venue.Name
+		results[idx] = result
+	}
+
+	return EventsSearchResponse{Results: results, Size: uint8(size)}
+}
+
+func MapToVenuesSearchResponse(documents []search.VenueDocument) VenuesSearchResponse {
+	size := len(documents)
+	results := make([]VenueSearchResult, size)
+	for idx, document := range documents {
+		result := VenueSearchResult{
+			ID:          document.ID,
+			Name:        document.Name,
+			Description: document.Description,
+		}
+		result.Location.Address = document.Address
+		result.Location.City = document.City
+		result.Location.Subdivision = document.Subdivision
+		result.Location.CountryCode = document.CountryCode
+		results[idx] = result
+	}
+
+	return VenuesSearchResponse{Results: results, Size: uint8(size)}
 }

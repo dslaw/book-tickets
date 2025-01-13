@@ -1,0 +1,14 @@
+{
+    "mappings": {
+        "properties": {
+            "id": {"type": "unsigned_long"},
+            "name": {"type": "text"},
+            "description": {"type": "text"},
+            "address": {"type": "text"},
+            "city": {"type": "text"},
+            "subdivision": {"type": "text"},
+            "country_code": {"type": "text"},
+            "deleted": {"type": "boolean"}
+        }
+    }
+}

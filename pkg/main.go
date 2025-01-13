@@ -12,6 +12,7 @@ import (
 	pkgApi "github.com/dslaw/book-tickets/pkg/api"
 	"github.com/dslaw/book-tickets/pkg/cache"
 	"github.com/dslaw/book-tickets/pkg/repos"
+	"github.com/dslaw/book-tickets/pkg/search"
 	"github.com/dslaw/book-tickets/pkg/services"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
@@ -48,6 +49,18 @@ func main() {
 	}
 	defer ticketHoldClient.Close()
 
+	searchClient, err := search.NewSearchClient(
+		config.SearchURL,
+		config.SearchUser,
+		config.SearchPassword,
+		config.SearchEventsIndex,
+		config.SearchVenuesIndex,
+	)
+	if err != nil {
+		slog.Error("Unable to create an OpenSearch client", "error", err)
+		os.Exit(1)
+	}
+
 	venuesService := services.NewVenuesService(repos.NewVenuesRepo(pool))
 	eventsService := services.NewEventsService(repos.NewEventsRepo(pool))
 	ticketsService := services.NewTicketsService(
@@ -55,6 +68,11 @@ func main() {
 		ticketHoldClient,
 		config.TicketHoldDuration,
 	)
+	searchService, err := services.NewSearchService(searchClient, config.SearchMaxResults)
+	if err != nil {
+		slog.Error("Unable to create a search service", "error", err)
+		os.Exit(1)
+	}
 
 	router := http.NewServeMux()
 	api := humago.New(router, huma.DefaultConfig("API", config.APIVersion))
@@ -62,6 +80,7 @@ func main() {
 	pkgApi.RegisterVenuesHandlers(api, venuesService)
 	pkgApi.RegisterEventsHandlers(api, eventsService)
 	pkgApi.RegisterTicketsHandlers(api, ticketsService)
+	pkgApi.RegisterSearchHandlers(api, searchService)
 
 	address := fmt.Sprintf(":%s", config.Port)
 	slog.Info(fmt.Sprintf("Listening on %s", address))

@@ -6,6 +6,7 @@ import (
 
 	"github.com/dslaw/book-tickets/pkg/api"
 	"github.com/dslaw/book-tickets/pkg/entities"
+	"github.com/dslaw/book-tickets/pkg/search"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -164,5 +165,118 @@ func TestMapToAvailableTicketsAggregateResponse(t *testing.T) {
 	}
 
 	actual := api.MapToAvailableTicketsAggregateResponse(ticketAggregates)
+	assert.EqualValues(t, expected, actual)
+}
+
+func TestMapToEventsSearchResponse(t *testing.T) {
+	document1StartsAt, _ := time.Parse(time.RFC3339, "2024-01-01T00:00:00+00:00")
+	document1EndsAt, _ := time.Parse(time.RFC3339, "2024-01-01T03:00:00+00:00")
+	document2StartsAt, _ := time.Parse(time.RFC3339, "2024-01-02T00:00:00+00:00")
+	document2EndsAt, _ := time.Parse(time.RFC3339, "2024-01-02T03:00:00+00:00")
+	documents := []search.EventDocument{
+		{
+			ID:          1,
+			Name:        "Test Event 1",
+			Description: "",
+			StartsAt:    document1StartsAt,
+			EndsAt:      document1EndsAt,
+			Venue: search.EventVenue{
+				ID:   1,
+				Name: "Test Venue 1",
+			},
+			Deleted: false,
+		},
+		{
+			ID:          2,
+			Name:        "Test Event 2",
+			Description: "An event",
+			StartsAt:    document2StartsAt,
+			EndsAt:      document2EndsAt,
+			Venue: search.EventVenue{
+				ID:   1,
+				Name: "Test Venue 1",
+			},
+			Deleted: false,
+		},
+	}
+
+	result1 := api.EventSearchResult{
+		ID:          1,
+		Name:        "Test Event 1",
+		Description: "",
+		StartsAt:    document1StartsAt,
+		EndsAt:      document1EndsAt,
+	}
+	result1.Venue.ID = 1
+	result1.Venue.Name = "Test Venue 1"
+	result2 := api.EventSearchResult{
+		ID:          2,
+		Name:        "Test Event 2",
+		Description: "An event",
+		StartsAt:    document2StartsAt,
+		EndsAt:      document2EndsAt,
+	}
+	result2.Venue.ID = 1
+	result2.Venue.Name = "Test Venue 1"
+
+	expected := api.EventsSearchResponse{
+		Results: []api.EventSearchResult{result1, result2},
+		Size:    2,
+	}
+
+	actual := api.MapToEventsSearchResponse(documents)
+	assert.EqualValues(t, expected, actual)
+}
+
+func TestMapToVenuesSearchResponse(t *testing.T) {
+	documents := []search.VenueDocument{
+		{
+			ID:          1,
+			Name:        "Test Venue 1",
+			Description: "",
+			Address:     "111 Front St",
+			City:        "San Francisco",
+			Subdivision: "CA",
+			CountryCode: "USA",
+			Deleted:     false,
+		},
+		{
+			ID:          2,
+			Name:        "Test Venue 2",
+			Description: "A venue",
+			Address:     "222 Front St",
+			City:        "San Francisco",
+			Subdivision: "CA",
+			CountryCode: "USA",
+			Deleted:     false,
+		},
+	}
+
+	result1 := api.VenueSearchResult{
+		ID:          1,
+		Name:        "Test Venue 1",
+		Description: "",
+	}
+	result1.Location.Address = "111 Front St"
+	result1.Location.City = "San Francisco"
+	result1.Location.Subdivision = "CA"
+	result1.Location.CountryCode = "USA"
+
+	result2 := api.VenueSearchResult{
+		ID:          2,
+		Name:        "Test Venue 2",
+		Description: "A venue",
+	}
+	result2.Location.Address = "222 Front St"
+	result2.Location.City = "San Francisco"
+	result2.Location.Subdivision = "CA"
+	result2.Location.CountryCode = "USA"
+
+	expected := api.VenuesSearchResponse{
+		Results: []api.VenueSearchResult{result1, result2},
+		Size:    2,
+	}
+
+	actual := api.MapToVenuesSearchResponse(documents)
 	assert.EqualValues(t, expected, actual)
 }

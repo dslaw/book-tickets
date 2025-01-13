@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"strconv"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/dslaw/book-tickets/pkg/cache"
@@ -17,7 +18,7 @@ func RegisterVenuesHandlers(api huma.API, service *services.VenuesService) {
 	// Create a new venue.
 	huma.Post(api, "/venues", func(ctx context.Context, input *struct {
 		Body WriteVenueRequest
-	}) (*CreateVenueResponseEnvelope, error) {
+	}) (*ResponseEnvelope, error) {
 		venue := MapToVenue(input.Body)
 		id, err := service.CreateVenue(ctx, venue)
 		if err != nil {
@@ -25,14 +26,14 @@ func RegisterVenuesHandlers(api huma.API, service *services.VenuesService) {
 			return nil, huma.Error500InternalServerError("")
 		}
 
-		response := &CreateVenueResponseEnvelope{Body: CreateVenueResponse{ID: id}}
+		response := &ResponseEnvelope{Body: CreateVenueResponse{ID: id}}
 		return response, nil
 	})
 
 	// Read an existing venue by id.
 	huma.Get(api, "/venues/{id}", func(ctx context.Context, input *struct {
 		ID int32 `path:"id"`
-	}) (*GetVenueResponseEnvelope, error) {
+	}) (*ResponseEnvelope, error) {
 		venue, err := service.GetVenue(ctx, input.ID)
 		if err != nil {
 			if errors.Is(err, repos.ErrNoSuchEntity) {
@@ -43,7 +44,7 @@ func RegisterVenuesHandlers(api huma.API, service *services.VenuesService) {
 			return nil, huma.Error500InternalServerError("")
 		}
 
-		response := &GetVenueResponseEnvelope{Body: MapToVenueResponse(venue)}
+		response := &ResponseEnvelope{Body: MapToVenueResponse(venue)}
 		return response, nil
 	})
 
@@ -93,7 +94,7 @@ func RegisterEventsHandlers(api huma.API, service *services.EventsService) {
 	// Create a new event.
 	huma.Post(api, "/events", func(ctx context.Context, input *struct {
 		Body WriteEventRequest
-	}) (*CreateEventResponseEnvelope, error) {
+	}) (*ResponseEnvelope, error) {
 		event := MapToEvent(input.Body)
 		if !event.IsValid() {
 			return nil, huma.Error422UnprocessableEntity("")
@@ -105,14 +106,14 @@ func RegisterEventsHandlers(api huma.API, service *services.EventsService) {
 			return nil, huma.Error500InternalServerError("")
 		}
 
-		response := &CreateEventResponseEnvelope{Body: CreateEventResponse{ID: id}}
+		response := &ResponseEnvelope{Body: CreateEventResponse{ID: id}}
 		return response, nil
 	})
 
 	// Read an existing event by id.
 	huma.Get(api, "/events/{id}", func(ctx context.Context, input *struct {
 		ID int32 `path:"id"`
-	}) (*GetEventResponseEnvelope, error) {
+	}) (*ResponseEnvelope, error) {
 		event, err := service.GetEvent(ctx, input.ID)
 		if err != nil {
 			if errors.Is(err, repos.ErrNoSuchEntity) {
@@ -123,7 +124,7 @@ func RegisterEventsHandlers(api huma.API, service *services.EventsService) {
 			return nil, huma.Error500InternalServerError("")
 		}
 
-		response := &GetEventResponseEnvelope{Body: MapToEventResponse(event)}
+		response := &ResponseEnvelope{Body: MapToEventResponse(event)}
 		return response, nil
 	})
 
@@ -200,7 +201,7 @@ func RegisterTicketsHandlers(api huma.API, service *services.TicketsService) {
 	// Read tickets for an event.
 	huma.Get(api, "/events/{id}/tickets", func(ctx context.Context, input *struct {
 		EventID int32 `path:"id"`
-	}) (*GetAvailableTicketsAggregateResponseEnvelope, error) {
+	}) (*ResponseEnvelope, error) {
 		ticketAggregates, err := service.GetAvailableTickets(ctx, input.EventID)
 		if err != nil {
 			if errors.Is(err, repos.ErrNoSuchEntity) {
@@ -215,7 +216,7 @@ func RegisterTicketsHandlers(api huma.API, service *services.TicketsService) {
 			return nil, huma.Error500InternalServerError("")
 		}
 
-		response := &GetAvailableTicketsAggregateResponseEnvelope{}
+		response := &ResponseEnvelope{}
 		response.Body = MapToAvailableTicketsAggregateResponse(ticketAggregates)
 		return response, nil
 	})
@@ -265,7 +266,7 @@ func RegisterTicketsHandlers(api huma.API, service *services.TicketsService) {
 		// for hold id.
 		UserID string `header:"x-user-id"`
 		Card   Card
-	}) (*PaymentResponseEnvelope, error) {
+	}) (*ResponseEnvelope, error) {
 		holdID := input.UserID
 		userID, err := strconv.Atoi(input.UserID)
 		if err != nil {
@@ -333,7 +334,7 @@ func RegisterTicketsHandlers(api huma.API, service *services.TicketsService) {
 		response := PaymentResponse{Success: paymentSuccessful}
 
 		if !paymentSuccessful {
-			return &PaymentResponseEnvelope{Body: response}, nil
+			return &ResponseEnvelope{Body: response}, nil
 		}
 
 		err = service.SetTicketPurchaser(ctx, input.ID, int32(userID))
@@ -352,6 +353,40 @@ func RegisterTicketsHandlers(api huma.API, service *services.TicketsService) {
 		// purchased, there shouldn't be any impact to functionality. The
 		// purchase hold should also be removed from Redis once its expiration
 		// time is hit.
-		return &PaymentResponseEnvelope{Body: response}, nil
+		return &ResponseEnvelope{Body: response}, nil
+	})
+}
+
+type SearchParams struct {
+	QueryTerm string `query:"q"`
+	Limit     int32  `query:"limit" default:"25" minimum:"1"`
+}
+
+func RegisterSearchHandlers(api huma.API, service *services.SearchService) {
+	huma.Get(api, "/search/events", func(ctx context.Context, input *struct {
+		StartsAt time.Time `query:"starts_at"`
+		SearchParams
+	}) (*ResponseEnvelope, error) {
+		documents, err := service.SearchEvents(ctx, input.QueryTerm, input.StartsAt, input.Limit)
+		if err != nil {
+			slog.Error("Issue searching for events", "error", err)
+			return nil, huma.Error500InternalServerError("")
+		}
+
+		response := MapToEventsSearchResponse(documents)
+		return &ResponseEnvelope{Body: response}, nil
+	})
+
+	huma.Get(api, "/search/venues", func(ctx context.Context, input *struct {
+		SearchParams
+	}) (*ResponseEnvelope, error) {
+		documents, err := service.SearchVenues(ctx, input.QueryTerm, input.Limit)
+		if err != nil {
+			slog.Error("Issue searching for venues", "error", err)
+			return nil, huma.Error500InternalServerError("")
+		}
+
+		response := MapToVenuesSearchResponse(documents)
+		return &ResponseEnvelope{Body: response}, nil
 	})
 }

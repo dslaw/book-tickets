@@ -31,14 +31,24 @@ jobs:
       - name: Run unit tests
         run: go test -short ./...
 
-      - name: Build container
+      - name: Build application container
         run: docker compose build app
 
       - name: Run database schema migrations
         run: docker compose run --rm dbmigrations -e TEST_DATABASE_URL up
 
+      - name: Create test indices in OpenSearch
+        run: |
+          docker compose up -d search
+          ./search/create_indexes.sh test
+
       - name: Run tests
         run: |
+          docker compose up -d cache db search
           set -a && source .env
-          docker compose up -d
           go test ./...
+          docker compose down
+
+      # Last as the service isn't currently used by the test suite.
+      - name: Build CDC container
+        run: docker compose build cdc

@@ -2,6 +2,7 @@ services:
   db:
     image: postgres:16.1-alpine
     env_file: .env
+    command: -c wal_level='logical'
     ports:
       - "8432:5432"
     volumes:
@@ -21,6 +22,33 @@ services:
       - "8379:6379"
     command: redis-server --save 60 1 --loglevel warning --requirepass app_user
 
+  search:
+    image: opensearchproject/opensearch:2.18.0
+    env_file: .env
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+      - "DISABLE_SECURITY_PLUGIN=true"
+      - "OPENSEARCH_INITIAL_ADMIN_PASSWORD=${SEARCH_PASSWORD}"
+    ports:
+      - "9200:9200"
+      - "9600:9600"
+    volumes:
+      - os-data:/usr/share/opensearch/data
+
+  cdc:
+    build:
+      context: ./cdc
+      dockerfile: Dockerfile
+    env_file: .env
+    volumes:
+      - cdc-data:/usr/src/pgsync
+    depends_on:
+      - cache
+      - db
+      - search
+
   app:
     build: .
     env_file: .env
@@ -28,7 +56,11 @@ services:
       - "8000:${PORT}"
     depends_on:
       - cache
+      - cdc
       - db
+      - search
 
 volumes:
+  cdc-data:
+  os-data:
   pg-data:
